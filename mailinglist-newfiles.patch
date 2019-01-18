@@ -1,0 +1,3304 @@
+diff --git a/drivers/net/arinc429/Kconfig b/drivers/net/arinc429/Kconfig
+new file mode 100644
+index 0000000..428164c
+--- /dev/null
++++ b/drivers/net/arinc429/Kconfig
+@@ -0,0 +1,32 @@
++menu "ARINC429 Device Drivers"
++
++config ARINC429_VARINC429
++	tristate "Virtual Local ARINC429 Interface (varinc429)"
++	---help---
++	  Similar to the network loopback devices, varinc429 offers a
++	  virtual local ARINC429 interface.
++
++	  This driver can also be built as a module.  If so, the module
++	  will be called varinc429.
++
++config ARINC429_DEV
++	tristate "Platform ARINC429 drivers with Netlink support"
++	default y
++	---help---
++	  Enables the common framework for platform ARINC429 drivers with Netlink
++	  support. This is the standard library for ARINC429 drivers.
++	  If unsure, say Y.
++
++if ARINC429_DEV
++
++endif
++
++config ARINC429_DEBUG_DEVICES
++	bool "ARINC429 devices debugging messages"
++	---help---
++	  Say Y here if you want the ARINC429 device drivers to produce a bunch of
++	  debug messages to the system log.  Select this if you are having
++	  a problem with ARINC429 support and want to see more of what is going
++	  on.
++
++endmenu
+diff --git a/drivers/net/arinc429/Makefile b/drivers/net/arinc429/Makefile
+new file mode 100644
+index 0000000..70aaaac
+--- /dev/null
++++ b/drivers/net/arinc429/Makefile
+@@ -0,0 +1,11 @@
++#
++#  Makefile for the Linux Controller Area Network drivers.
++#
++
++obj-$(CONFIG_ARINC429_VARINC429)	+= varinc429.o
++
++obj-$(CONFIG_ARINC429_DEV)		+= arinc429-dev.o
++arinc429-dev-y				:= dev.o
++
++subdir-ccflags-y += -D__CHECK_ENDIAN__
++subdir-ccflags-$(CONFIG_ARINC429_DEBUG_DEVICES) += -DDEBUG
+diff --git a/drivers/net/arinc429/dev.c b/drivers/net/arinc429/dev.c
+new file mode 100644
+index 0000000..0debeec
+--- /dev/null
++++ b/drivers/net/arinc429/dev.c
+@@ -0,0 +1,448 @@
++/*
++ * Copyright (C) 2015 Marek Vasut <marex@denx.de>
++ *
++ * Based on the SocketCAN stack.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the version 2 of the GNU General Public License
++ * as published by the Free Software Foundation
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/slab.h>
++#include <linux/netdevice.h>
++#include <linux/if_arp.h>
++#include <linux/arinc429.h>
++#include <linux/arinc429/dev.h>
++#include <linux/arinc429/skb.h>
++#include <linux/arinc429/netlink.h>
++#include <net/rtnetlink.h>
++
++#define MOD_DESC "ARINC429 device driver interface"
++
++MODULE_DESCRIPTION(MOD_DESC);
++MODULE_LICENSE("GPL v2");
++MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
++
++/*
++ * Local echo of ARINC429 messages
++ *
++ * ARINC429 network devices *should* support a local echo functionality
++ * (see Documentation/networking/can.txt). To test the handling of ARINC429
++ * interfaces that do not support the local echo both driver types are
++ * implemented. In the case that the driver does not support the echo
++ * the IFF_ECHO remains clear in dev->flags. This causes the PF_ARINC429 core
++ * to perform the echo as a fallback solution.
++ */
++static void arinc429_flush_echo_skb(struct net_device *dev)
++{
++	struct arinc429_priv *priv = netdev_priv(dev);
++	struct net_device_stats *stats = &dev->stats;
++	int i;
++
++	for (i = 0; i < priv->echo_skb_max; i++) {
++		if (priv->echo_skb[i]) {
++			kfree_skb(priv->echo_skb[i]);
++			priv->echo_skb[i] = NULL;
++			stats->tx_dropped++;
++			stats->tx_aborted_errors++;
++		}
++	}
++}
++
++/*
++ * Put the skb on the stack to be looped backed locally lateron
++ *
++ * The function is typically called in the start_xmit function
++ * of the device driver. The driver must protect access to
++ * priv->echo_skb, if necessary.
++ */
++void arinc429_put_echo_skb(struct sk_buff *skb, struct net_device *dev,
++			   unsigned int idx)
++{
++	struct arinc429_priv *priv = netdev_priv(dev);
++
++	BUG_ON(idx >= priv->echo_skb_max);
++
++	/* check flag whether this packet has to be looped back */
++	if (!(dev->flags & IFF_ECHO) || skb->pkt_type != PACKET_LOOPBACK ||
++	    skb->protocol != htons(ETH_P_ARINC429)) {
++		kfree_skb(skb);
++		return;
++	}
++
++	if (!priv->echo_skb[idx]) {
++		skb = arinc429_create_echo_skb(skb);
++		if (!skb)
++			return;
++
++		/* make settings for echo to reduce code in irq context */
++		skb->pkt_type = PACKET_BROADCAST;
++		skb->ip_summed = CHECKSUM_UNNECESSARY;
++		skb->dev = dev;
++
++		/* save this skb for tx interrupt echo handling */
++		priv->echo_skb[idx] = skb;
++	} else {
++		/* locking problem with netif_stop_queue() ?? */
++		netdev_err(dev, "%s: BUG! echo_skb is occupied!\n", __func__);
++		kfree_skb(skb);
++	}
++}
++EXPORT_SYMBOL_GPL(arinc429_put_echo_skb);
++
++/*
++ * Get the skb from the stack and loop it back locally
++ *
++ * The function is typically called when the TX done interrupt
++ * is handled in the device driver. The driver must protect
++ * access to priv->echo_skb, if necessary.
++ */
++unsigned int arinc429_get_echo_skb(struct net_device *dev, unsigned int idx)
++{
++	struct arinc429_priv *priv = netdev_priv(dev);
++
++	BUG_ON(idx >= priv->echo_skb_max);
++
++	if (priv->echo_skb[idx]) {
++		struct sk_buff *skb = priv->echo_skb[idx];
++
++		if (!(skb->tstamp.tv64))
++			__net_timestamp(skb);
++
++		netif_rx(priv->echo_skb[idx]);
++		priv->echo_skb[idx] = NULL;
++
++		return ARINC429_MTU;
++	}
++
++	return 0;
++}
++EXPORT_SYMBOL_GPL(arinc429_get_echo_skb);
++
++/*
++  * Remove the skb from the stack and free it.
++  *
++  * The function is typically called when TX failed.
++  */
++void arinc429_free_echo_skb(struct net_device *dev, unsigned int idx)
++{
++	struct arinc429_priv *priv = netdev_priv(dev);
++
++	BUG_ON(idx >= priv->echo_skb_max);
++
++	if (priv->echo_skb[idx]) {
++		dev_kfree_skb_any(priv->echo_skb[idx]);
++		priv->echo_skb[idx] = NULL;
++	}
++}
++EXPORT_SYMBOL_GPL(arinc429_free_echo_skb);
++
++static void arinc429_setup(struct net_device *dev)
++{
++	dev->type = ARPHRD_ARINC429;
++	dev->mtu = ARINC429_MTU;
++	dev->hard_header_len = 0;
++	dev->addr_len = 0;
++	dev->tx_queue_len = 10;
++
++	/* New-style flags. */
++	dev->flags = IFF_NOARP;
++	dev->features = NETIF_F_HW_CSUM;
++}
++
++struct sk_buff *alloc_arinc429_skb(struct net_device *dev,
++				   struct arinc429_frame **cf)
++{
++	struct sk_buff *skb;
++
++	skb = netdev_alloc_skb(dev, sizeof(struct arinc429_skb_priv) +
++			       sizeof(struct arinc429_frame));
++	if (unlikely(!skb))
++		return NULL;
++
++	__net_timestamp(skb);
++	skb->protocol = htons(ETH_P_ARINC429);
++	skb->pkt_type = PACKET_BROADCAST;
++	skb->ip_summed = CHECKSUM_UNNECESSARY;
++
++	skb_reset_mac_header(skb);
++	skb_reset_network_header(skb);
++	skb_reset_transport_header(skb);
++
++	arinc429_skb_reserve(skb);
++	arinc429_skb_prv(skb)->ifindex = dev->ifindex;
++
++	*cf = (struct arinc429_frame *)skb_put(skb,
++					       sizeof(struct arinc429_frame));
++	memset(*cf, 0, sizeof(struct arinc429_frame));
++
++	return skb;
++}
++EXPORT_SYMBOL_GPL(alloc_arinc429_skb);
++
++/*
++ * Allocate and setup space for the ARINC429 network device
++ */
++struct net_device *alloc_arinc429dev(int sizeof_priv, unsigned int echo_skb_max)
++{
++	struct net_device *dev;
++	struct arinc429_priv *priv;
++	int size;
++
++	if (echo_skb_max)
++		size = ALIGN(sizeof_priv, sizeof(struct sk_buff *)) +
++			echo_skb_max * sizeof(struct sk_buff *);
++	else
++		size = sizeof_priv;
++
++	dev = alloc_netdev(size, "arinc429-%d", NET_NAME_UNKNOWN,
++			   arinc429_setup);
++	if (!dev)
++		return NULL;
++
++	priv = netdev_priv(dev);
++
++	if (echo_skb_max) {
++		priv->echo_skb_max = echo_skb_max;
++		priv->echo_skb = (void *)priv +
++			ALIGN(sizeof_priv, sizeof(struct sk_buff *));
++	}
++
++	return dev;
++}
++EXPORT_SYMBOL_GPL(alloc_arinc429dev);
++
++/*
++ * Free space of the ARINC429 network device
++ */
++void free_arinc429dev(struct net_device *dev)
++{
++	free_netdev(dev);
++}
++EXPORT_SYMBOL_GPL(free_arinc429dev);
++
++/*
++ * changing MTU and control mode for ARINC429 devices
++ */
++int arinc429_change_mtu(struct net_device *dev, int new_mtu)
++{
++	/* Do not allow changing the MTU while running */
++	if (dev->flags & IFF_UP)
++		return -EBUSY;
++
++	if (new_mtu != ARINC429_MTU)
++		return -EINVAL;
++
++	dev->mtu = new_mtu;
++	return 0;
++}
++EXPORT_SYMBOL_GPL(arinc429_change_mtu);
++
++/*
++ * Common open function when the device gets opened.
++ *
++ * This function should be called in the open function of the device
++ * driver.
++ */
++int open_arinc429dev(struct net_device *dev)
++{
++	struct arinc429_priv *priv = netdev_priv(dev);
++
++	if (!priv->rate.rx_rate || !priv->rate.tx_rate) {
++		netdev_err(dev, "data rate not yet defined\n");
++		return -EINVAL;
++	}
++
++	/* Switch carrier on if device was stopped while in bus-off state */
++	if (!netif_carrier_ok(dev))
++		netif_carrier_on(dev);
++
++	return 0;
++}
++EXPORT_SYMBOL_GPL(open_arinc429dev);
++
++/*
++ * Common close function for cleanup before the device gets closed.
++ *
++ * This function should be called in the close function of the device
++ * driver.
++ */
++void close_arinc429dev(struct net_device *dev)
++{
++	arinc429_flush_echo_skb(dev);
++}
++EXPORT_SYMBOL_GPL(close_arinc429dev);
++
++/*
++ * ARINC429 netlink interface
++ */
++static const struct nla_policy arinc429_policy[IFLA_ARINC429_MAX + 1] = {
++	[IFLA_ARINC429_RATE]	= { .len = sizeof(struct arinc429_rate) },
++	[IFLA_ARINC429_CTRLMODE] = { .len = sizeof(struct arinc429_ctrlmode) },
++};
++
++static int arinc429_changelink(struct net_device *dev,
++			       struct nlattr *tb[], struct nlattr *data[])
++{
++	struct arinc429_priv *priv = netdev_priv(dev);
++	int err;
++
++	/* We need synchronization with dev->stop() */
++	ASSERT_RTNL();
++
++	if (data[IFLA_ARINC429_RATE]) {
++		struct arinc429_rate clk;
++
++		/* Do not allow changing clock while running */
++		if (dev->flags & IFF_UP)
++			return -EBUSY;
++
++		/*
++		 * Check if the clock frequency is valid, ARINC429
++		 * supports either 12.5kHz bus (Low speed bus mode)
++		 * or 100kHz (High speed bus mode). If the speed is
++		 * set to 0, do not modify that configuration.
++		 */
++		memcpy(&clk, nla_data(data[IFLA_ARINC429_RATE]), sizeof(clk));
++		if (clk.rx_rate && clk.rx_rate != 12500 &&
++		    clk.rx_rate != 100000)
++			return -EINVAL;
++		if (clk.tx_rate && clk.tx_rate != 12500 &&
++		    clk.tx_rate != 100000)
++			return -EINVAL;
++
++		memcpy(&priv->rate, &clk, sizeof(clk));
++
++		if (priv->do_set_rate) {
++			/* Finally, set the data rate register */
++			err = priv->do_set_rate(dev);
++			if (err)
++				return err;
++		}
++	}
++
++	if (data[IFLA_ARINC429_CTRLMODE]) {
++		struct arinc429_ctrlmode *cm;
++
++		/* Do not allow changing controller mode while running */
++		if (dev->flags & IFF_UP)
++			return -EBUSY;
++		cm = nla_data(data[IFLA_ARINC429_CTRLMODE]);
++
++		/* check whether changed bits are allowed to be modified */
++		if (cm->mask & ~priv->ctrlmode_supported)
++			return -EOPNOTSUPP;
++
++		/* clear bits to be modified and copy the flag values */
++		priv->ctrlmode &= ~cm->mask;
++		priv->ctrlmode |= (cm->flags & cm->mask);
++	}
++
++	return 0;
++}
++
++static size_t arinc429_get_size(const struct net_device *dev)
++{
++	size_t size = 0;
++
++	/* IFLA_ARINC429_RATE */
++	size += nla_total_size(sizeof(struct arinc429_rate));
++	/* IFLA_ARINC429_CTRLMODE */
++	size += nla_total_size(sizeof(struct arinc429_ctrlmode));
++
++	return size;
++}
++
++static int arinc429_fill_info(struct sk_buff *skb, const struct net_device *dev)
++{
++	struct arinc429_priv *priv = netdev_priv(dev);
++	struct arinc429_ctrlmode cm = {.flags = priv->ctrlmode};
++
++	if (
++		nla_put(skb, IFLA_ARINC429_RATE, sizeof(priv->rate), &priv->rate) ||
++		nla_put(skb, IFLA_ARINC429_CTRLMODE, sizeof(cm), &cm)
++	)
++		return -EMSGSIZE;
++
++	return 0;
++}
++
++static int arinc429_newlink(struct net *src_net, struct net_device *dev,
++			    struct nlattr *tb[], struct nlattr *data[])
++{
++	return -EOPNOTSUPP;
++}
++
++static struct rtnl_link_ops arinc429_link_ops __read_mostly = {
++	.kind		= "arinc429",
++	.maxtype	= IFLA_ARINC429_MAX,
++	.policy		= arinc429_policy,
++	.setup		= arinc429_setup,
++	.newlink	= arinc429_newlink,
++	.changelink	= arinc429_changelink,
++	.get_size	= arinc429_get_size,
++	.fill_info	= arinc429_fill_info,
++};
++
++/*
++ * Register the ARINC429 network device
++ */
++int register_arinc429dev(struct net_device *dev)
++{
++	dev->rtnl_link_ops = &arinc429_link_ops;
++	return register_netdev(dev);
++}
++EXPORT_SYMBOL_GPL(register_arinc429dev);
++
++/*
++ * Unregister the ARINC429 network device
++ */
++void unregister_arinc429dev(struct net_device *dev)
++{
++	unregister_netdev(dev);
++}
++EXPORT_SYMBOL_GPL(unregister_arinc429dev);
++
++/*
++ * Test if a network device is a arinc429dev based device
++ * and return the arinc429_priv* if so.
++ */
++struct arinc429_priv *safe_arinc429dev_priv(struct net_device *dev)
++{
++	if ((dev->type != ARPHRD_ARINC429) ||
++	    (dev->rtnl_link_ops != &arinc429_link_ops))
++		return NULL;
++
++	return netdev_priv(dev);
++}
++EXPORT_SYMBOL_GPL(safe_arinc429dev_priv);
++
++static __init int arinc429_dev_init(void)
++{
++	int err;
++
++	err = rtnl_link_register(&arinc429_link_ops);
++	if (!err)
++		pr_info(MOD_DESC "\n");
++
++	return err;
++}
++module_init(arinc429_dev_init);
++
++static __exit void arinc429_dev_exit(void)
++{
++	rtnl_link_unregister(&arinc429_link_ops);
++}
++module_exit(arinc429_dev_exit);
++
++MODULE_ALIAS_RTNL_LINK("arinc429");
+diff --git a/drivers/net/arinc429/varinc429.c b/drivers/net/arinc429/varinc429.c
+new file mode 100644
+index 0000000..775ae48
+--- /dev/null
++++ b/drivers/net/arinc429/varinc429.c
+@@ -0,0 +1,163 @@
++/*
++ * varinc429.c - Virtual ARINC429 interface
++ *
++ * Copyright (C) 2015 Marek Vasut <marex@denx.de>
++ *
++ * Based on the SocketCAN stack.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of
++ * the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/netdevice.h>
++#include <linux/if_arp.h>
++#include <linux/if_ether.h>
++#include <linux/arinc429.h>
++#include <linux/arinc429/dev.h>
++#include <linux/arinc429/skb.h>
++#include <linux/slab.h>
++#include <net/rtnetlink.h>
++
++MODULE_DESCRIPTION("Virtual ARINC429 interface");
++MODULE_LICENSE("GPL v2");
++MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
++
++/*
++ * ARINC429 test feature:
++ * Enable the echo on driver level for testing the ARINC429 core echo modes.
++ */
++
++static bool echo; /* echo testing. Default: 0 (Off) */
++module_param(echo, bool, S_IRUGO);
++MODULE_PARM_DESC(echo, "Echo sent frames (for testing). Default: 0 (Off)");
++
++static void varinc429_rx(struct sk_buff *skb, struct net_device *dev)
++{
++	struct net_device_stats *stats = &dev->stats;
++
++	stats->rx_packets++;
++	stats->rx_bytes += ARINC429_MTU;
++
++	skb->pkt_type  = PACKET_BROADCAST;
++	skb->dev       = dev;
++	skb->ip_summed = CHECKSUM_UNNECESSARY;
++
++	if (!(skb->tstamp.tv64))
++		__net_timestamp(skb);
++
++	netif_rx_ni(skb);
++}
++
++static netdev_tx_t varinc429_tx(struct sk_buff *skb, struct net_device *dev)
++{
++	struct net_device_stats *stats = &dev->stats;
++	int loop;
++
++	if (arinc429_dropped_invalid_skb(dev, skb))
++		return NETDEV_TX_OK;
++
++	stats->tx_packets++;
++	stats->tx_bytes += ARINC429_MTU;
++
++	/* set flag whether this packet has to be looped back */
++	loop = skb->pkt_type == PACKET_LOOPBACK;
++
++	if (!echo) {
++		/* no echo handling available inside this driver */
++
++		if (loop) {
++			/*
++			 * Only count the packets here, because the
++			 * ARINC429 core already did the echo for us
++			 */
++			stats->rx_packets++;
++			stats->rx_bytes += ARINC429_MTU;
++		}
++		consume_skb(skb);
++		return NETDEV_TX_OK;
++	}
++
++	/* Perform standard echo handling for ARINC429 network interfaces */
++	if (loop) {
++		skb = arinc429_create_echo_skb(skb);
++		if (!skb)
++			return NETDEV_TX_OK;
++
++		/* Receive with packet counting */
++		varinc429_rx(skb, dev);
++	} else {
++		/* No looped packets => no counting */
++		consume_skb(skb);
++	}
++	return NETDEV_TX_OK;
++}
++
++static int varinc429_change_mtu(struct net_device *dev, int new_mtu)
++{
++	/* Do not allow changing the MTU while running */
++	if (dev->flags & IFF_UP)
++		return -EBUSY;
++
++	if (new_mtu != ARINC429_MTU)
++		return -EINVAL;
++
++	dev->mtu = new_mtu;
++	return 0;
++}
++
++static const struct net_device_ops varinc429_netdev_ops = {
++	.ndo_start_xmit = varinc429_tx,
++	.ndo_change_mtu = varinc429_change_mtu,
++};
++
++static void varinc429_setup(struct net_device *dev)
++{
++	dev->type		= ARPHRD_ARINC429;
++	dev->mtu		= ARINC429_MTU;
++	dev->hard_header_len	= 0;
++	dev->addr_len		= 0;
++	dev->tx_queue_len	= 0;
++	dev->flags		= IFF_NOARP;
++
++	/* set flags according to driver capabilities */
++	if (echo)
++		dev->flags |= IFF_ECHO;
++
++	dev->netdev_ops		= &varinc429_netdev_ops;
++	dev->destructor		= free_netdev;
++}
++
++static struct rtnl_link_ops varinc429_link_ops __read_mostly = {
++	.kind	= "varinc429",
++	.setup	= varinc429_setup,
++};
++
++static __init int varinc429_init_module(void)
++{
++	pr_info("varinc429: Virtual ARINC429 interface driver\n");
++
++	if (echo)
++		pr_info("varinc429: enabled echo on driver level.\n");
++
++	return rtnl_link_register(&varinc429_link_ops);
++}
++
++static __exit void varinc429_cleanup_module(void)
++{
++	rtnl_link_unregister(&varinc429_link_ops);
++}
++
++module_init(varinc429_init_module);
++module_exit(varinc429_cleanup_module);
+diff --git a/include/linux/arinc429/core.h b/include/linux/arinc429/core.h
+new file mode 100644
+index 0000000..2e32858
+--- /dev/null
++++ b/include/linux/arinc429/core.h
+@@ -0,0 +1,61 @@
++/*
++ * linux/arinc429/core.h
++ *
++ * Protoypes and definitions for ARINC429 protocol modules
++ * using the PF_ARINC429 core.
++ *
++ * Copyright (C) 2015 Marek Vasut <marex@denx.de>
++ *
++ * Based on the SocketCAN stack.
++ */
++
++#ifndef __ARINC429_CORE_H__
++#define __ARINC429_CORE_H__
++
++#include <linux/arinc429.h>
++#include <linux/skbuff.h>
++#include <linux/netdevice.h>
++
++#define ARINC429_VERSION "20151101"
++
++/* Increment this number each time you change some user-space interface */
++#define ARINC429_ABI_VERSION "1"
++
++#define ARINC429_VERSION_STRING		\
++	"rev " ARINC429_VERSION " abi " ARINC429_ABI_VERSION
++
++#define DNAME(dev) ((dev) ? (dev)->name : "any")
++
++/**
++ * struct arinc429_proto - ARINC429 protocol structure
++ * @type:       type argument in socket() syscall, e.g. SOCK_DGRAM.
++ * @protocol:   protocol number in socket() syscall.
++ * @ops:        pointer to struct proto_ops for sock->ops.
++ * @prot:       pointer to struct proto structure.
++ */
++struct arinc429_proto {
++	int			type;
++	int			protocol;
++	const struct proto_ops	*ops;
++	struct proto		*prot;
++};
++
++/* Function prototypes for the ARINC429 network layer core (af_arinc429.c) */
++extern int  arinc429_proto_register(const struct arinc429_proto *cp);
++extern void arinc429_proto_unregister(const struct arinc429_proto *cp);
++
++extern int  arinc429_rx_register(struct net_device *dev,
++				 struct arinc429_filter *filter,
++				 void (*func)(struct sk_buff *, void *),
++				 void *data, char *ident);
++
++extern void arinc429_rx_unregister(struct net_device *dev,
++				   struct arinc429_filter *filter,
++				   void (*func)(struct sk_buff *, void *),
++				   void *data);
++
++extern int arinc429_send(struct sk_buff *skb, int loop);
++extern int arinc429_ioctl(struct socket *sock, unsigned int cmd,
++			  unsigned long arg);
++
++#endif /* __ARINC429_CORE_H__ */
+diff --git a/include/linux/arinc429/dev.h b/include/linux/arinc429/dev.h
+new file mode 100644
+index 0000000..e496fbf
+--- /dev/null
++++ b/include/linux/arinc429/dev.h
+@@ -0,0 +1,81 @@
++/*
++ * linux/arinc429/dev.h
++ *
++ * Definitions for the ARINC429 network device driver interface
++ *
++ * Copyright (C) 2015 Marek Vasut <marex@denx.de>
++ *
++ * Based on the SocketCAN stack.
++ */
++
++#ifndef __ARINC429_DEV_H__
++#define __ARINC429_DEV_H__
++
++#include <linux/arinc429.h>
++#include <linux/arinc429/netlink.h>
++
++/*
++ * ARINC429 mode
++ */
++enum arinc429_mode {
++	ARINC429_MODE_STOP = 0,
++	ARINC429_MODE_START,
++	ARINC429_MODE_SLEEP
++};
++
++/*
++ * ARINC429 common private data
++ */
++struct arinc429_priv {
++	struct arinc429_rate rate;
++	u32 ctrlmode;
++	u32 ctrlmode_supported;
++
++	int (*do_set_rate)(struct net_device *dev);
++	int (*do_set_mode)(struct net_device *dev, enum arinc429_mode mode);
++
++	unsigned int echo_skb_max;
++	struct sk_buff **echo_skb;
++};
++
++/* Drop a given socketbuffer if it does not contain a valid ARINC429 frame. */
++static inline int arinc429_dropped_invalid_skb(struct net_device *dev,
++					       struct sk_buff *skb)
++{
++	if (skb->protocol == htons(ETH_P_ARINC429)) {
++		if (unlikely(skb->len != ARINC429_MTU))
++			goto inval_skb;
++	} else
++		goto inval_skb;
++
++	return 0;
++
++inval_skb:
++	kfree_skb(skb);
++	dev->stats.tx_dropped++;
++	return 1;
++}
++
++struct net_device *alloc_arinc429dev(int sizeof_priv,
++				     unsigned int echo_skb_max);
++void free_arinc429dev(struct net_device *dev);
++
++/* a arinc429dev safe wrapper around netdev_priv */
++struct arinc429_priv *safe_arinc429dev_priv(struct net_device *dev);
++
++int open_arinc429dev(struct net_device *dev);
++void close_arinc429dev(struct net_device *dev);
++int arinc429_change_mtu(struct net_device *dev, int new_mtu);
++
++int register_arinc429dev(struct net_device *dev);
++void unregister_arinc429dev(struct net_device *dev);
++
++void arinc429_put_echo_skb(struct sk_buff *skb, struct net_device *dev,
++		      unsigned int idx);
++unsigned int arinc429_get_echo_skb(struct net_device *dev, unsigned int idx);
++void arinc429_free_echo_skb(struct net_device *dev, unsigned int idx);
++
++struct sk_buff *alloc_arinc429_skb(struct net_device *dev,
++				   struct arinc429_frame **cf);
++
++#endif /* __ARINC429_DEV_H__ */
+diff --git a/include/linux/arinc429/skb.h b/include/linux/arinc429/skb.h
+new file mode 100644
+index 0000000..20b76b5
+--- /dev/null
++++ b/include/linux/arinc429/skb.h
+@@ -0,0 +1,79 @@
++/*
++ * linux/arinc429/skb.h
++ *
++ * Definitions for the ARINC429 network socket buffer
++ *
++ * Copyright (C) 2015 Marek Vasut <marex@denx.de>
++ *
++ * Based on the SocketCAN stack.
++ */
++
++#ifndef __ARINC429_SKB_H__
++#define __ARINC429_SKB_H__
++
++#include <linux/types.h>
++#include <linux/skbuff.h>
++#include <linux/arinc429.h>
++#include <net/sock.h>
++
++/*
++ * The struct arinc429_skb_priv is used to transport additional information
++ * along with the stored struct arinc429(fd)_frame that arinc429 not be
++ * contained in existing struct sk_buff elements.
++ * N.B. that this information must not be modified in cloned ARINC429 sk_buffs.
++ * To modify the ARINC429 frame content or the struct arinc429_skb_priv content
++ * skb_copy() needs to be used instead of skb_clone().
++ */
++
++/**
++ * struct arinc429_skb_priv - private additional data inside ARINC429 sk_buffs
++ * @ifindex:	ifindex of the first interface the ARINC429 frame appeared on
++ * @cf:		align to the following ARINC429 frame at skb->data
++ */
++struct arinc429_skb_priv {
++	int			ifindex;
++	struct arinc429_frame	af[0];
++};
++
++static inline struct arinc429_skb_priv *arinc429_skb_prv(struct sk_buff *skb)
++{
++	return (struct arinc429_skb_priv *)(skb->head);
++}
++
++static inline void arinc429_skb_reserve(struct sk_buff *skb)
++{
++	skb_reserve(skb, sizeof(struct arinc429_skb_priv));
++}
++
++static inline void arinc429_skb_set_owner(struct sk_buff *skb, struct sock *sk)
++{
++	if (sk) {
++		sock_hold(sk);
++		skb->destructor = sock_efree;
++		skb->sk = sk;
++	}
++}
++
++/*
++ * returns an unshared skb owned by the original sock to be echo'ed back
++ */
++static inline struct sk_buff *arinc429_create_echo_skb(struct sk_buff *skb)
++{
++	if (skb_shared(skb)) {
++		struct sk_buff *nskb = skb_clone(skb, GFP_ATOMIC);
++
++		if (likely(nskb)) {
++			arinc429_skb_set_owner(nskb, skb->sk);
++			consume_skb(skb);
++			return nskb;
++		}
++
++		kfree_skb(skb);
++		return NULL;
++	}
++
++	/* we can assume to have an unshared skb with proper owner */
++	return skb;
++}
++
++#endif /* __ARINC429_SKB_H__ */
+diff --git a/include/uapi/linux/arinc429.h b/include/uapi/linux/arinc429.h
+new file mode 100644
+index 0000000..0cd5151
+--- /dev/null
++++ b/include/uapi/linux/arinc429.h
+@@ -0,0 +1,88 @@
++/*
++ * linux/arinc429.h
++ *
++ * Definitions for ARINC429 network layer
++ * (socket addr / ARINC429 frame / ARINC429 filter)
++ *
++ * * Copyright (C) 2015 Marek Vasut <marex@denx.de>
++ *
++ * Based on the SocketCAN stack.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the version 2 of the GNU General Public License
++ * as published by the Free Software Foundation
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ */
++
++#ifndef __UAPI_ARINC429_H__
++#define __UAPI_ARINC429_H__
++
++#include <linux/types.h>
++#include <linux/socket.h>
++
++/* ARINC429 kernel definitions */
++
++/*
++ * ARINC packet:
++ *
++ * .-.---.------.---.-----.
++ * |P|SSM| Data |SDI|Label|
++ * '-'---'------'---'-----'
++ *  3 3 2 2....1 1 9 8...0
++ *  1 0 9 8    1 0
++ */
++
++/**
++ * struct arinc429_frame - basic ARINC429 frame structure
++ * @label:	ARINC429 label
++ * @data:	ARINC429 P, SSM, DATA and SDI
++ */
++struct arinc429_frame {
++	__u8	label;		/* 8 bit label */
++	__u8	data[3];	/* Up-to 23 bits are valid. */
++};
++
++#define ARINC429_MTU		(sizeof(struct arinc429_frame))
++
++/* particular protocols of the protocol family PF_ARINC429 */
++#define ARINC429_RAW		1 /* RAW sockets */
++#define ARINC429_NPROTO		2
++
++#define SOL_ARINC429_BASE	100
++
++/**
++ * struct sockaddr_arinc429 - the sockaddr structure for ARINC429 sockets
++ * @arinc429_family:	address family number AF_ARINC429.
++ * @arinc429_ifindex:	ARINC429 network interface index.
++ * @arinc429_addr:	protocol specific address information
++ */
++struct sockaddr_arinc429 {
++	__kernel_sa_family_t arinc429_family;
++	int         arinc429_ifindex;
++	union {
++		/* reserved for future ARINC429 protocols address information */
++	} arinc429_addr;
++};
++
++/**
++ * struct arinc429_filter - ARINC429 ID based filter in arinc429_register().
++ * @arinc429_label: relevant bits of ARINC429 ID which are not masked out.
++ * @arinc429_mask:  ARINC429 mask (see description)
++ *
++ * Description:
++ * A filter matches, when
++ *
++ *          <received_arinc429_id> & mask == arinc429_id & mask
++ */
++struct arinc429_filter {
++	__u8	label;		/* 8 bit label */
++	__u8	mask;		/* 8 bit label mask */
++#define ARINC429_INV_FILTER	0x00000001
++	__u32	flags;		/* Flags */
++};
++
++#endif /* __UAPI_ARINC429_H__ */
+diff --git a/include/uapi/linux/arinc429/Kbuild b/include/uapi/linux/arinc429/Kbuild
+new file mode 100644
+index 0000000..21c91bf
+--- /dev/null
++++ b/include/uapi/linux/arinc429/Kbuild
+@@ -0,0 +1,6 @@
++# UAPI Header export list
++header-y += bcm.h
++header-y += error.h
++header-y += gw.h
++header-y += netlink.h
++header-y += raw.h
+diff --git a/include/uapi/linux/arinc429/netlink.h b/include/uapi/linux/arinc429/netlink.h
+new file mode 100644
+index 0000000..5d2f48b
+--- /dev/null
++++ b/include/uapi/linux/arinc429/netlink.h
+@@ -0,0 +1,55 @@
++/*
++ * linux/arinc429/netlink.h
++ *
++ * Definitions for the ARINC429 netlink interface
++ *
++ * Copyright (C) 2015 Marek Vasut <marex@denx.de>
++ *
++ * Based on the SocketARINC429 stack.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the version 2 of the GNU General Public License
++ * as published by the Free Software Foundation
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ */
++
++#ifndef _UAPI_ARINC429_NETLINK_H
++#define _UAPI_ARINC429_NETLINK_H
++
++#include <linux/types.h>
++
++/*
++ * ARINC429 data rate parameters
++ */
++struct arinc429_rate {
++	__u32 rx_rate;		/* ARINC429 bus RX rate [Hz] */
++	__u32 tx_rate;		/* ARINC429 bus TX rate [Hz] */
++};
++
++/*
++ * ARINC429 controller mode
++ */
++struct arinc429_ctrlmode {
++	__u32 mask;
++	__u32 flags;
++};
++
++#define ARINC429_CTRLMODE_LOOPBACK	0x01	/* Loopback mode */
++
++/*
++ * ARINC429 netlink interface
++ */
++enum {
++	IFLA_ARINC429_UNSPEC,
++	IFLA_ARINC429_RATE,
++	IFLA_ARINC429_CTRLMODE,
++	__IFLA_ARINC429_MAX
++};
++
++#define IFLA_ARINC429_MAX	(__IFLA_ARINC429_MAX - 1)
++
++#endif /* !_UAPI_ARINC429_NETLINK_H */
+diff --git a/include/uapi/linux/arinc429/raw.h b/include/uapi/linux/arinc429/raw.h
+new file mode 100644
+index 0000000..e951148
+--- /dev/null
++++ b/include/uapi/linux/arinc429/raw.h
+@@ -0,0 +1,36 @@
++/*
++ * linux/arinc429/raw.h
++ *
++ * Definitions for raw ARINC429 sockets
++ *
++ * Copyright (C) 2015 Marek Vasut <marex@denx.de>
++ *
++ * Based on the SocketCAN stack.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the version 2 of the GNU General Public License
++ * as published by the Free Software Foundation
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ */
++
++#ifndef _UAPI_ARINC429_RAW_H
++#define _UAPI_ARINC429_RAW_H
++
++#include <linux/arinc429.h>
++
++#define SOL_ARINC429_RAW (SOL_ARINC429_BASE + ARINC429_RAW)
++
++/* for socket options affecting the socket (not the global system) */
++
++enum {
++	ARINC429_RAW_FILTER = 1,	/* set 0 .. n arinc429_filter(s)     */
++	ARINC429_RAW_LOOPBACK,		/* local loopback (default:on)       */
++	ARINC429_RAW_RECV_OWN_MSGS,	/* receive my own msgs (default:off) */
++	ARINC429_RAW_JOIN_FILTERS,	/* all filters must match to trigger */
++};
++
++#endif /* !_UAPI_ARINC429_RAW_H */
+diff --git a/net/arinc429/Kconfig b/net/arinc429/Kconfig
+new file mode 100644
+index 0000000..2952123
+--- /dev/null
++++ b/net/arinc429/Kconfig
+@@ -0,0 +1,31 @@
++#
++# ARINC429 network layer core configuration
++#
++
++menuconfig ARINC429
++	depends on NET
++	tristate "ARINC429 bus subsystem support"
++	---help---
++	  ARINC429 is a slow communication protocol used in avionics.
++	  More information on the ARINC429 protocol family PF_ARINC429
++	  is contained in <Documentation/networking/arinc429.txt>.
++
++	  If you want ARINC429 support you should say Y here and also to
++	  the specific driver for your controller(s) below.
++
++if ARINC429
++
++config ARINC429_RAW
++	tristate "Raw ARINC429 Protocol"
++	default y
++	---help---
++	  The raw ARINC429 protocol option offers access to the ARINC429
++	  bus via the BSD socket API. You probably want to use the raw
++	  socket in most cases where no higher level protocol is being
++	  used. The raw socket has several filter options e.g. ID masking
++	  / error frames. To receive/send raw ARINC429 messages, use AF_ARINC429
++	  with protocol ARINC429_RAW.
++
++source "drivers/net/arinc429/Kconfig"
++
++endif
+diff --git a/net/arinc429/Makefile b/net/arinc429/Makefile
+new file mode 100644
+index 0000000..f444729
+--- /dev/null
++++ b/net/arinc429/Makefile
+@@ -0,0 +1,9 @@
++#
++#  Makefile for the Linux Controller Area Network core.
++#
++
++obj-$(CONFIG_ARINC429)		+= arinc429.o
++arinc429-y			:= af_arinc429.o proc.o
++
++obj-$(CONFIG_ARINC429_RAW)	+= arinc429-raw.o
++arinc429-raw-y			:= raw.o
+diff --git a/net/arinc429/af_arinc429.c b/net/arinc429/af_arinc429.c
+new file mode 100644
+index 0000000..39c8d0a
+--- /dev/null
++++ b/net/arinc429/af_arinc429.c
+@@ -0,0 +1,812 @@
++/*
++ * af_arinc429.c - Protocol family ARINC429 core module
++ *                 (used by different ARINC429 protocol modules)
++ *
++ * Copyright (C) 2015 Marek Vasut <marex@denx.de>
++ *
++ * Based on the SocketCAN stack.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of
++ * the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <linux/module.h>
++#include <linux/stddef.h>
++#include <linux/init.h>
++#include <linux/kmod.h>
++#include <linux/slab.h>
++#include <linux/list.h>
++#include <linux/spinlock.h>
++#include <linux/rcupdate.h>
++#include <linux/uaccess.h>
++#include <linux/net.h>
++#include <linux/netdevice.h>
++#include <linux/socket.h>
++#include <linux/if_ether.h>
++#include <linux/if_arp.h>
++#include <linux/skbuff.h>
++#include <linux/arinc429.h>
++#include <linux/arinc429/core.h>
++#include <linux/arinc429/skb.h>
++#include <linux/ratelimit.h>
++#include <net/net_namespace.h>
++#include <net/sock.h>
++
++#include "af_arinc429.h"
++
++MODULE_DESCRIPTION("ARINC429 PF_ARINC429 core");
++MODULE_LICENSE("GPL v2");
++MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
++
++MODULE_ALIAS_NETPROTO(PF_ARINC429);
++
++/* receive filters subscribed for 'all' ARINC429 devices */
++struct dev_rcv_lists arinc429_rx_alldev_list;
++static DEFINE_SPINLOCK(arinc429_rcvlists_lock);
++
++static struct kmem_cache *rcv_cache __read_mostly;
++
++/* table of registered ARINC429 protocols */
++static const struct arinc429_proto *proto_tab[ARINC429_NPROTO] __read_mostly;
++static DEFINE_MUTEX(proto_tab_lock);
++
++struct timer_list arinc429_stattimer;   /* timer for statistics update */
++struct s_stats    arinc429_stats;       /* packet statistics */
++struct s_pstats   arinc429_pstats;      /* receive list statistics */
++
++/*
++ * af_arinc429 socket functions
++ */
++
++int arinc429_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
++{
++	struct sock *sk = sock->sk;
++
++	switch (cmd) {
++	case SIOCGSTAMP:
++		return sock_get_timestamp(sk, (struct timeval __user *)arg);
++
++	default:
++		return -ENOIOCTLCMD;
++	}
++}
++EXPORT_SYMBOL(arinc429_ioctl);
++
++static void arinc429_sock_destruct(struct sock *sk)
++{
++	skb_queue_purge(&sk->sk_receive_queue);
++}
++
++static const struct arinc429_proto *arinc429_get_proto(int protocol)
++{
++	const struct arinc429_proto *cp;
++
++	rcu_read_lock();
++	cp = rcu_dereference(proto_tab[protocol]);
++	if (cp && !try_module_get(cp->prot->owner))
++		cp = NULL;
++	rcu_read_unlock();
++
++	return cp;
++}
++
++static inline void arinc429_put_proto(const struct arinc429_proto *cp)
++{
++	module_put(cp->prot->owner);
++}
++
++static int arinc429_create(struct net *net, struct socket *sock, int protocol,
++			   int kern)
++{
++	struct sock *sk;
++	const struct arinc429_proto *cp;
++	int err = 0;
++
++	sock->state = SS_UNCONNECTED;
++
++	if (protocol < 0 || protocol >= ARINC429_NPROTO)
++		return -EINVAL;
++
++	if (!net_eq(net, &init_net))
++		return -EAFNOSUPPORT;
++
++	cp = arinc429_get_proto(protocol);
++
++#ifdef CONFIG_MODULES
++	if (!cp) {
++		/* Try to load protocol module if kernel is modular */
++		err = request_module("arinc429-proto-%d", protocol);
++
++		/*
++		 * In case of error we only print a message but don't
++		 * return the error code immediately.  Below we will
++		 * return -EPROTONOSUPPORT
++		 */
++		if (err) {
++			pr_err_ratelimited(
++				"arinc429: request_module (arinc429-proto-%d) failed.\n",
++				protocol);
++		}
++
++		cp = arinc429_get_proto(protocol);
++	}
++#endif
++
++	/* Check for available protocol and correct usage */
++	if (!cp)
++		return -EPROTONOSUPPORT;
++
++	if (cp->type != sock->type) {
++		err = -EPROTOTYPE;
++		goto errout;
++	}
++
++	sock->ops = cp->ops;
++
++	sk = sk_alloc(net, PF_ARINC429, GFP_KERNEL, cp->prot, kern);
++	if (!sk) {
++		err = -ENOMEM;
++		goto errout;
++	}
++
++	sock_init_data(sock, sk);
++	sk->sk_destruct = arinc429_sock_destruct;
++
++	if (sk->sk_prot->init)
++		err = sk->sk_prot->init(sk);
++
++	if (err) {
++		/* release sk on errors */
++		sock_orphan(sk);
++		sock_put(sk);
++	}
++
++ errout:
++	arinc429_put_proto(cp);
++	return err;
++}
++
++/*
++ * af_arinc429 tx path
++ */
++
++/**
++ * arinc429_send - transmit a ARINC429 frame (optional with local loopback)
++ * @skb: pointer to socket buffer with ARINC429 frame in data section
++ * @loop: loopback for listeners on local ARINC429 sockets
++ *        (recommended default!)
++ *
++ * Due to the loopback this routine must not be called from hardirq context.
++ *
++ * Return:
++ *  0 on success
++ *  -ENETDOWN when the selected interface is down
++ *  -ENOBUFS on full driver queue (see net_xmit_errno())
++ *  -ENOMEM when local loopback failed at calling skb_clone()
++ *  -EPERM when trying to send on a non-ARINC429 interface
++ *  -EMSGSIZE ARINC429 frame size is bigger than ARINC429 interface MTU
++ *  -EINVAL when the skb->data does not contain a valid ARINC429 frame
++ */
++int arinc429_send(struct sk_buff *skb, int loop)
++{
++	struct sk_buff *newskb = NULL;
++	int err = -EINVAL;
++
++	if (skb->len == ARINC429_MTU)
++		skb->protocol = htons(ETH_P_ARINC429);
++	else
++		goto inval_skb;
++
++	/*
++	 * Make sure the ARINC429 frame can pass the selected
++	 * ARINC429 netdevice.
++	 */
++	if (unlikely(skb->len > skb->dev->mtu)) {
++		err = -EMSGSIZE;
++		goto inval_skb;
++	}
++
++	if (unlikely(skb->dev->type != ARPHRD_ARINC429)) {
++		err = -EPERM;
++		goto inval_skb;
++	}
++
++	if (unlikely(!(skb->dev->flags & IFF_UP))) {
++		err = -ENETDOWN;
++		goto inval_skb;
++	}
++
++	skb->ip_summed = CHECKSUM_UNNECESSARY;
++
++	skb_reset_mac_header(skb);
++	skb_reset_network_header(skb);
++	skb_reset_transport_header(skb);
++
++	if (loop) {
++		/* local loopback of sent ARINC429 frames */
++
++		/* indication for the ARINC429 driver: do loopback */
++		skb->pkt_type = PACKET_LOOPBACK;
++
++		/*
++		 * The reference to the originating sock may be required
++		 * by the receiving socket to check whether the frame is
++		 * its own.
++		 * Example: arinc429_raw sockopt ARINC429_RAW_RECV_OWN_MSGS
++		 * Therefore we have to ensure that skb->sk remains the
++		 * reference to the originating sock by restoring skb->sk
++		 * after each skb_clone() or skb_orphan() usage.
++		 */
++
++		if (!(skb->dev->flags & IFF_ECHO)) {
++			/*
++			 * If the interface is not capable to do loopback
++			 * itself, we do it here.
++			 */
++			newskb = skb_clone(skb, GFP_ATOMIC);
++			if (!newskb) {
++				kfree_skb(skb);
++				return -ENOMEM;
++			}
++
++			arinc429_skb_set_owner(newskb, skb->sk);
++			newskb->ip_summed = CHECKSUM_UNNECESSARY;
++			newskb->pkt_type = PACKET_BROADCAST;
++		}
++	} else {
++		/* indication for the ARINC429 driver: no loopback required */
++		skb->pkt_type = PACKET_HOST;
++	}
++
++	/* send to netdevice */
++	err = dev_queue_xmit(skb);
++	if (err > 0)
++		err = net_xmit_errno(err);
++
++	if (err) {
++		kfree_skb(newskb);
++		return err;
++	}
++
++	if (newskb) {
++		if (!(newskb->tstamp.tv64))
++			__net_timestamp(newskb);
++
++		netif_rx_ni(newskb);
++	}
++
++	/* update statistics */
++	arinc429_stats.tx_frames++;
++	arinc429_stats.tx_frames_delta++;
++
++	return 0;
++
++inval_skb:
++	kfree_skb(skb);
++	return err;
++}
++EXPORT_SYMBOL(arinc429_send);
++
++/*
++ * af_arinc429 rx path
++ */
++
++static struct dev_rcv_lists *find_dev_rcv_lists(struct net_device *dev)
++{
++	if (!dev)
++		return &arinc429_rx_alldev_list;
++	else
++		return (struct dev_rcv_lists *)dev->ml_priv;
++}
++
++/**
++ * find_rcv_list - determine optimal filterlist inside device filter struct
++ * @label: pointer to ARINC429 identifier of a given arinc429_filter
++ * @mask: pointer to ARINC429 mask of a given arinc429_filter
++ * @inv: filter is inverted
++ * @d: pointer to the device filter struct
++ *
++ * Description:
++ *  Returns the optimal filterlist to reduce the filter handling in the
++ *  receive path. This function is called by service functions that need
++ *  to register or unregister a arinc429_filter in the filter lists.
++ *
++ *  A filter matches in general, when
++ *
++ *          <received_label> & mask == label & mask
++ *
++ *  The filter can be inverted (ARINC429_INV_FILTER bit set in label).
++ *
++ * Return:
++ *  Pointer to optimal filterlist for the given label/mask pair.
++ *  Constistency checked mask.
++ *  Reduced label to have a preprocessed filter compare value.
++ */
++static struct hlist_head *find_rcv_list(u8 *label, u8 *mask, const bool inv,
++					struct dev_rcv_lists *d)
++{
++	/* reduce condition testing at receive time */
++	*label &= *mask;
++
++	/* inverse label/can_mask filter */
++	if (inv)
++		return &d->rx[RX_INV];
++
++	/* mask == 0 => no condition testing at receive time */
++	if (!(*mask))
++		return &d->rx[RX_ALL];
++
++	/* default: filter via label/can_mask */
++	return &d->rx[RX_FIL];
++}
++
++/**
++ * arinc429_rx_register - subscribe ARINC429 frames from a specific interface
++ * @dev: pointer to netdevice (NULL => subscribe from 'all' devices list)
++ * @filter: ARINC429 filter (see description)
++ * @func: callback function on filter match
++ * @data: returned parameter for callback function
++ * @ident: string for calling module identification
++ *
++ * Description:
++ *  Invokes the callback function with the received sk_buff and the given
++ *  parameter 'data' on a matching receive filter. A filter matches, when
++ *
++ *          <received_arinc429_id> & mask == arinc429_id & mask
++ *
++ *  The filter can be inverted (ARINC429_INV_FILTER bit set in arinc429_id)
++ *  or it can filter for error message frames (ARINC429_ERR_FLAG bit set in
++ *  mask).
++ *
++ *  The provided pointer to the sk_buff is guaranteed to be valid as long as
++ *  the callback function is running. The callback function must *not* free
++ *  the given sk_buff while processing it's task. When the given sk_buff is
++ *  needed after the end of the callback function it must be cloned inside
++ *  the callback function with skb_clone().
++ *
++ * Return:
++ *  0 on success
++ *  -ENOMEM on missing cache mem to create subscription entry
++ *  -ENODEV unknown device
++ */
++int arinc429_rx_register(struct net_device *dev,
++			 struct arinc429_filter *filter,
++			 void (*func)(struct sk_buff *, void *), void *data,
++			 char *ident)
++{
++	struct receiver *r;
++	struct hlist_head *rl;
++	struct dev_rcv_lists *d;
++	int err = 0;
++	u8 label = filter->label;
++	u8 mask = filter->mask;
++	const bool inv = filter->flags & ARINC429_INV_FILTER;
++
++	/* insert new receiver  (dev,label,mask) -> (func,data) */
++
++	if (dev && dev->type != ARPHRD_ARINC429)
++		return -ENODEV;
++
++	r = kmem_cache_alloc(rcv_cache, GFP_KERNEL);
++	if (!r)
++		return -ENOMEM;
++
++	spin_lock(&arinc429_rcvlists_lock);
++
++	d = find_dev_rcv_lists(dev);
++	if (d) {
++		rl = find_rcv_list(&label, &mask, inv, d);
++
++		r->label   = label;
++		r->mask    = mask;
++		r->matches = 0;
++		r->func    = func;
++		r->data    = data;
++		r->ident   = ident;
++
++		hlist_add_head_rcu(&r->list, rl);
++		d->entries++;
++
++		arinc429_pstats.rcv_entries++;
++		if (arinc429_pstats.rcv_entries_max < arinc429_pstats.rcv_entries)
++			arinc429_pstats.rcv_entries_max = arinc429_pstats.rcv_entries;
++	} else {
++		kmem_cache_free(rcv_cache, r);
++		err = -ENODEV;
++	}
++
++	spin_unlock(&arinc429_rcvlists_lock);
++
++	return err;
++}
++EXPORT_SYMBOL(arinc429_rx_register);
++
++/*
++ * arinc429_rx_delete_receiver - rcu callback for single receiver entry removal
++ */
++static void arinc429_rx_delete_receiver(struct rcu_head *rp)
++{
++	struct receiver *r = container_of(rp, struct receiver, rcu);
++
++	kmem_cache_free(rcv_cache, r);
++}
++
++/**
++ * arinc429_rx_unregister - unsubscribe ARINC429 frames from specific interface
++ * @dev: pointer to netdevice (NULL => unsubscribe from 'all' devices list)
++ * @filter: ARINC429 filter
++ * @func: callback function on filter match
++ * @data: returned parameter for callback function
++ *
++ * Description:
++ *  Removes subscription entry depending on given (subscription) values.
++ */
++void arinc429_rx_unregister(struct net_device *dev,
++			    struct arinc429_filter *filter,
++			    void (*func)(struct sk_buff *, void *),
++			    void *data)
++{
++	struct receiver *r = NULL;
++	struct hlist_head *rl;
++	struct dev_rcv_lists *d;
++	u8 label = filter->label;
++	u8 mask = filter->mask;
++	const bool inv = filter->flags & ARINC429_INV_FILTER;
++
++	if (dev && dev->type != ARPHRD_ARINC429)
++		return;
++
++	spin_lock(&arinc429_rcvlists_lock);
++
++	d = find_dev_rcv_lists(dev);
++	if (!d) {
++		pr_err("BUG: receive list not found for dev %s, label %02X, mask %02X\n",
++		       DNAME(dev), label, mask);
++		goto out;
++	}
++
++	rl = find_rcv_list(&label, &mask, inv, d);
++
++	/*
++	 * Search the receiver list for the item to delete.  This should
++	 * exist, since no receiver may be unregistered that hasn't
++	 * been registered before.
++	 */
++
++	hlist_for_each_entry_rcu(r, rl, list) {
++		if (r->label == label && r->mask == mask &&
++		    r->func == func && r->data == data)
++			break;
++	}
++
++	/*
++	 * Check for bugs in ARINC429 protocol implementations using af_arinc429.c:
++	 * 'r' will be NULL if no matching list item was found for removal.
++	 */
++
++	if (!r) {
++		WARN(1, "BUG: receive list entry not found for dev %s, id %02X, mask %02X\n",
++		     DNAME(dev), label, mask);
++		goto out;
++	}
++
++	hlist_del_rcu(&r->list);
++	d->entries--;
++
++	if (arinc429_pstats.rcv_entries > 0)
++		arinc429_pstats.rcv_entries--;
++
++	/* remove device structure requested by NETDEV_UNREGISTER */
++	if (d->remove_on_zero_entries && !d->entries) {
++		kfree(d);
++		dev->ml_priv = NULL;
++	}
++
++ out:
++	spin_unlock(&arinc429_rcvlists_lock);
++
++	/* schedule the receiver item for deletion */
++	if (r)
++		call_rcu(&r->rcu, arinc429_rx_delete_receiver);
++}
++EXPORT_SYMBOL(arinc429_rx_unregister);
++
++static inline void deliver(struct sk_buff *skb, struct receiver *r)
++{
++	r->func(skb, r->data);
++	r->matches++;
++}
++
++static unsigned int arinc429_rcv_filter(struct dev_rcv_lists *d,
++					struct sk_buff *skb)
++{
++	struct receiver *r;
++	unsigned int matches = 0;
++	struct arinc429_frame *af = (struct arinc429_frame *)skb->data;
++	__u8 label = af->label;
++
++	if (d->entries == 0)
++		return 0;
++
++	/* check for unfiltered entries */
++	hlist_for_each_entry_rcu(r, &d->rx[RX_ALL], list) {
++		deliver(skb, r);
++		matches++;
++	}
++
++	/* check for label/mask entries */
++	hlist_for_each_entry_rcu(r, &d->rx[RX_FIL], list) {
++		if ((label & r->mask) == r->label) {
++			deliver(skb, r);
++			matches++;
++		}
++	}
++
++	/* check for inverted label/mask entries */
++	hlist_for_each_entry_rcu(r, &d->rx[RX_INV], list) {
++		if ((label & r->mask) != r->label) {
++			deliver(skb, r);
++			matches++;
++		}
++	}
++
++	return matches;
++}
++
++static void arinc429_receive(struct sk_buff *skb, struct net_device *dev)
++{
++	struct dev_rcv_lists *d;
++	unsigned int matches;
++
++	/* update statistics */
++	arinc429_stats.rx_frames++;
++	arinc429_stats.rx_frames_delta++;
++
++	rcu_read_lock();
++
++	/* deliver the packet to sockets listening on all devices */
++	matches = arinc429_rcv_filter(&arinc429_rx_alldev_list, skb);
++
++	/* find receive list for this device */
++	d = find_dev_rcv_lists(dev);
++	if (d)
++		matches += arinc429_rcv_filter(d, skb);
++
++	rcu_read_unlock();
++
++	/* consume the skbuff allocated by the netdevice driver */
++	consume_skb(skb);
++
++	if (matches > 0) {
++		arinc429_stats.matches++;
++		arinc429_stats.matches_delta++;
++	}
++}
++
++static int arinc429_rcv(struct sk_buff *skb, struct net_device *dev,
++			struct packet_type *pt, struct net_device *orig_dev)
++{
++	int ret;
++
++	if (unlikely(!net_eq(dev_net(dev), &init_net)))
++		goto drop;
++
++	ret = WARN_ONCE(dev->type != ARPHRD_ARINC429 ||
++			skb->len != ARINC429_MTU,
++			"PF_ARINC429: dropped non conform ARINC429 skbuf: dev type %d, len %d\n",
++			dev->type, skb->len);
++	if (ret)
++		goto drop;
++
++	arinc429_receive(skb, dev);
++	return NET_RX_SUCCESS;
++
++drop:
++	kfree_skb(skb);
++	return NET_RX_DROP;
++}
++
++/*
++ * af_arinc429 protocol functions
++ */
++
++/**
++ * arinc429_proto_register - register ARINC429 transport protocol
++ * @cp: pointer to ARINC429 protocol structure
++ *
++ * Return:
++ *  0 on success
++ *  -EINVAL invalid (out of range) protocol number
++ *  -EBUSY  protocol already in use
++ *  -ENOBUF if proto_register() fails
++ */
++int arinc429_proto_register(const struct arinc429_proto *cp)
++{
++	int proto = cp->protocol;
++	int err = 0;
++
++	if (proto < 0 || proto >= ARINC429_NPROTO) {
++		pr_err("arinc429: protocol number %d out of range\n", proto);
++		return -EINVAL;
++	}
++
++	err = proto_register(cp->prot, 0);
++	if (err < 0)
++		return err;
++
++	mutex_lock(&proto_tab_lock);
++
++	if (proto_tab[proto]) {
++		pr_err("arinc429: protocol %d already registered\n", proto);
++		err = -EBUSY;
++	} else {
++		RCU_INIT_POINTER(proto_tab[proto], cp);
++	}
++
++	mutex_unlock(&proto_tab_lock);
++
++	if (err < 0)
++		proto_unregister(cp->prot);
++
++	return err;
++}
++EXPORT_SYMBOL(arinc429_proto_register);
++
++/**
++ * arinc429_proto_unregister - unregister ARINC429 transport protocol
++ * @cp: pointer to ARINC429 protocol structure
++ */
++void arinc429_proto_unregister(const struct arinc429_proto *cp)
++{
++	int proto = cp->protocol;
++
++	mutex_lock(&proto_tab_lock);
++	BUG_ON(proto_tab[proto] != cp);
++	RCU_INIT_POINTER(proto_tab[proto], NULL);
++	mutex_unlock(&proto_tab_lock);
++
++	synchronize_rcu();
++
++	proto_unregister(cp->prot);
++}
++EXPORT_SYMBOL(arinc429_proto_unregister);
++
++/*
++ * af_arinc429 notifier to create/remove ARINC429 netdevice specific structs
++ */
++static int arinc429_notifier(struct notifier_block *nb, unsigned long msg,
++			     void *ptr)
++{
++	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
++	struct dev_rcv_lists *d;
++
++	if (!net_eq(dev_net(dev), &init_net))
++		return NOTIFY_DONE;
++
++	if (dev->type != ARPHRD_ARINC429)
++		return NOTIFY_DONE;
++
++	switch (msg) {
++	case NETDEV_REGISTER:
++
++		/* create new dev_rcv_lists for this device */
++		d = kzalloc(sizeof(*d), GFP_KERNEL);
++		if (!d)
++			return NOTIFY_DONE;
++		BUG_ON(dev->ml_priv);
++		dev->ml_priv = d;
++
++		break;
++
++	case NETDEV_UNREGISTER:
++		spin_lock(&arinc429_rcvlists_lock);
++
++		d = dev->ml_priv;
++		if (d) {
++			if (d->entries)
++				d->remove_on_zero_entries = 1;
++			else {
++				kfree(d);
++				dev->ml_priv = NULL;
++			}
++		} else {
++			pr_err("arinc429: notifier: receive list not found for dev %s\n",
++			       dev->name);
++		}
++
++		spin_unlock(&arinc429_rcvlists_lock);
++
++		break;
++	}
++
++	return NOTIFY_DONE;
++}
++
++/*
++ * af_arinc429 module init/exit functions
++ */
++static struct packet_type arinc429_packet __read_mostly = {
++	.type	= cpu_to_be16(ETH_P_ARINC429),
++	.func	= arinc429_rcv,
++};
++
++static const struct net_proto_family arinc429_family_ops = {
++	.family	= PF_ARINC429,
++	.create	= arinc429_create,
++	.owner	= THIS_MODULE,
++};
++
++/* notifier block for netdevice event */
++static struct notifier_block arinc429_netdev_notifier __read_mostly = {
++	.notifier_call = arinc429_notifier,
++};
++
++static __init int arinc429_init(void)
++{
++	pr_info("arinc429: ARINC429 core (" ARINC429_VERSION_STRING ")\n");
++
++	memset(&arinc429_rx_alldev_list, 0, sizeof(arinc429_rx_alldev_list));
++
++	rcv_cache = kmem_cache_create("arinc429_receiver",
++				      sizeof(struct receiver),
++				      0, 0, NULL);
++	if (!rcv_cache)
++		return -ENOMEM;
++
++	/* the statistics are updated every second (timer triggered) */
++	setup_timer(&arinc429_stattimer, arinc429_stat_update, 0);
++	mod_timer(&arinc429_stattimer, round_jiffies(jiffies + HZ));
++
++	arinc429_init_proc();
++
++	/* protocol register */
++	sock_register(&arinc429_family_ops);
++	register_netdevice_notifier(&arinc429_netdev_notifier);
++	dev_add_pack(&arinc429_packet);
++
++	return 0;
++}
++
++static __exit void arinc429_exit(void)
++{
++	struct net_device *dev;
++
++	del_timer_sync(&arinc429_stattimer);
++
++	arinc429_remove_proc();
++
++	/* protocol unregister */
++	dev_remove_pack(&arinc429_packet);
++	unregister_netdevice_notifier(&arinc429_netdev_notifier);
++	sock_unregister(PF_ARINC429);
++
++	/* remove created dev_rcv_lists from still registered devices */
++	rcu_read_lock();
++	for_each_netdev_rcu(&init_net, dev) {
++		if (dev->type == ARPHRD_ARINC429 && dev->ml_priv) {
++			struct dev_rcv_lists *d = dev->ml_priv;
++
++			BUG_ON(d->entries);
++			kfree(d);
++			dev->ml_priv = NULL;
++		}
++	}
++	rcu_read_unlock();
++
++	rcu_barrier(); /* Wait for completion of call_rcu()'s */
++
++	kmem_cache_destroy(rcv_cache);
++}
++
++module_init(arinc429_init);
++module_exit(arinc429_exit);
+diff --git a/net/arinc429/af_arinc429.h b/net/arinc429/af_arinc429.h
+new file mode 100644
+index 0000000..7e4b00e
+--- /dev/null
++++ b/net/arinc429/af_arinc429.h
+@@ -0,0 +1,100 @@
++/*
++ * Copyright (C) 2015 Marek Vasut <marex@denx.de>
++ *
++ * Based on the SocketCAN stack.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of
++ * the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef AF_ARINC429_H
++#define AF_ARINC429_H
++
++#include <linux/skbuff.h>
++#include <linux/netdevice.h>
++#include <linux/list.h>
++#include <linux/rcupdate.h>
++#include <linux/arinc429.h>
++
++/* af_arinc429 rx dispatcher structures */
++
++struct receiver {
++	struct hlist_node	list;
++	struct rcu_head		rcu;
++	__u8			label;
++	__u8			mask;
++	unsigned long		matches;
++	void			(*func)(struct sk_buff *, void *);
++	void			*data;
++	char			*ident;
++};
++
++enum { RX_ALL, RX_FIL, RX_INV, RX_MAX };
++
++/* per device receive filters linked at dev->ml_priv */
++struct dev_rcv_lists {
++	struct hlist_head	rx[RX_MAX];
++	int			remove_on_zero_entries;
++	int			entries;
++};
++
++/* statistic structures */
++
++/* can be reset e.g. by arinc429_init_stats() */
++struct s_stats {
++	unsigned long jiffies_init;
++
++	unsigned long rx_frames;
++	unsigned long tx_frames;
++	unsigned long matches;
++
++	unsigned long total_rx_rate;
++	unsigned long total_tx_rate;
++	unsigned long total_rx_match_ratio;
++
++	unsigned long current_rx_rate;
++	unsigned long current_tx_rate;
++	unsigned long current_rx_match_ratio;
++
++	unsigned long max_rx_rate;
++	unsigned long max_tx_rate;
++	unsigned long max_rx_match_ratio;
++
++	unsigned long rx_frames_delta;
++	unsigned long tx_frames_delta;
++	unsigned long matches_delta;
++};
++
++/* persistent statistics */
++struct s_pstats {
++	unsigned long stats_reset;
++	unsigned long user_reset;
++	unsigned long rcv_entries;
++	unsigned long rcv_entries_max;
++};
++
++/* receive filters subscribed for 'all' ARINC429 devices */
++extern struct dev_rcv_lists arinc429_rx_alldev_list;
++
++/* function prototypes for the ARINC429 networklayer procfs (proc.c) */
++void arinc429_init_proc(void);
++void arinc429_remove_proc(void);
++void arinc429_stat_update(unsigned long data);
++
++/* structures and variables from af_arinc429.c needed in proc.c for reading */
++extern struct timer_list arinc429_stattimer;    /* timer for stats update */
++extern struct s_stats    arinc429_stats;        /* packet statistics */
++extern struct s_pstats   arinc429_pstats;       /* receive list statistics */
++extern struct hlist_head arinc429_rx_dev_list;  /* rx dispatcher structures */
++
++#endif /* AF_ARINC429_H */
+diff --git a/net/arinc429/proc.c b/net/arinc429/proc.c
+new file mode 100644
+index 0000000..28856a3
+--- /dev/null
++++ b/net/arinc429/proc.c
+@@ -0,0 +1,432 @@
++/*
++ * proc.c - procfs support for Protocol family ARINC429 core module
++ *
++ * Copyright (C) 2015 Marek Vasut <marex@denx.de>
++ *
++ * Based on the SocketCAN stack.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of
++ * the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <linux/module.h>
++#include <linux/proc_fs.h>
++#include <linux/list.h>
++#include <linux/rcupdate.h>
++#include <linux/if_arp.h>
++#include <linux/arinc429/core.h>
++
++#include "af_arinc429.h"
++
++/*
++ * proc filenames for the PF_ARINC429 core
++ */
++
++#define ARINC429_PROC_VERSION     "version"
++#define ARINC429_PROC_STATS       "stats"
++#define ARINC429_PROC_RESET_STATS "reset_stats"
++#define ARINC429_PROC_RCVLIST_ALL "rcvlist_all"
++#define ARINC429_PROC_RCVLIST_FIL "rcvlist_fil"
++#define ARINC429_PROC_RCVLIST_INV "rcvlist_inv"
++
++static struct proc_dir_entry *arinc429_dir;
++static struct proc_dir_entry *pde_version;
++static struct proc_dir_entry *pde_stats;
++static struct proc_dir_entry *pde_reset_stats;
++static struct proc_dir_entry *pde_rcvlist_all;
++static struct proc_dir_entry *pde_rcvlist_fil;
++static struct proc_dir_entry *pde_rcvlist_inv;
++
++static int user_reset;
++
++static const char rx_list_name[][8] = {
++	[RX_ALL] = "rx_all",
++	[RX_FIL] = "rx_fil",
++	[RX_INV] = "rx_inv",
++};
++
++/*
++ * af_arinc429 statistics stuff
++ */
++
++static void arinc429_init_stats(void)
++{
++	/*
++	 * This memset function is called from a timer context (when
++	 * arinc429_stattimer is active which is the default) OR in a process
++	 * context (reading the proc_fs when arinc429_stattimer is disabled).
++	 */
++	memset(&arinc429_stats, 0, sizeof(arinc429_stats));
++	arinc429_stats.jiffies_init = jiffies;
++
++	arinc429_pstats.stats_reset++;
++
++	if (user_reset) {
++		user_reset = 0;
++		arinc429_pstats.user_reset++;
++	}
++}
++
++static unsigned long calc_rate(unsigned long oldjif, unsigned long newjif,
++			       unsigned long count)
++{
++	unsigned long rate;
++
++	if (oldjif == newjif)
++		return 0;
++
++	/* see arinc429_stat_update() - this should NEVER happen! */
++	if (count > (ULONG_MAX / HZ)) {
++		pr_err("arinc429: calc_rate: count exceeded! %ld\n", count);
++		return 99999999;
++	}
++
++	rate = (count * HZ) / (newjif - oldjif);
++
++	return rate;
++}
++
++void arinc429_stat_update(unsigned long data)
++{
++	unsigned long j = jiffies; /* snapshot */
++
++	/* restart counting in timer context on user request */
++	if (user_reset)
++		arinc429_init_stats();
++
++	/* restart counting on jiffies overflow */
++	if (j < arinc429_stats.jiffies_init)
++		arinc429_init_stats();
++
++	/* prevent overflow in calc_rate() */
++	if (arinc429_stats.rx_frames > (ULONG_MAX / HZ))
++		arinc429_init_stats();
++
++	/* prevent overflow in calc_rate() */
++	if (arinc429_stats.tx_frames > (ULONG_MAX / HZ))
++		arinc429_init_stats();
++
++	/* matches overflow - very improbable */
++	if (arinc429_stats.matches > (ULONG_MAX / 100))
++		arinc429_init_stats();
++
++	/* calc total values */
++	if (arinc429_stats.rx_frames)
++		arinc429_stats.total_rx_match_ratio =
++			(arinc429_stats.matches * 100) /
++			arinc429_stats.rx_frames;
++
++	arinc429_stats.total_tx_rate = calc_rate(arinc429_stats.jiffies_init,
++						 j, arinc429_stats.tx_frames);
++	arinc429_stats.total_rx_rate = calc_rate(arinc429_stats.jiffies_init,
++						 j, arinc429_stats.rx_frames);
++
++	/* calc current values */
++	if (arinc429_stats.rx_frames_delta)
++		arinc429_stats.current_rx_match_ratio =
++			(arinc429_stats.matches_delta * 100) /
++			arinc429_stats.rx_frames_delta;
++
++	arinc429_stats.current_tx_rate =
++		calc_rate(0, HZ, arinc429_stats.tx_frames_delta);
++	arinc429_stats.current_rx_rate =
++		calc_rate(0, HZ, arinc429_stats.rx_frames_delta);
++
++	/* check / update maximum values */
++	if (arinc429_stats.max_tx_rate < arinc429_stats.current_tx_rate)
++		arinc429_stats.max_tx_rate = arinc429_stats.current_tx_rate;
++
++	if (arinc429_stats.max_rx_rate < arinc429_stats.current_rx_rate)
++		arinc429_stats.max_rx_rate = arinc429_stats.current_rx_rate;
++
++	if (arinc429_stats.max_rx_match_ratio < arinc429_stats.current_rx_match_ratio)
++		arinc429_stats.max_rx_match_ratio = arinc429_stats.current_rx_match_ratio;
++
++	/* clear values for 'current rate' calculation */
++	arinc429_stats.tx_frames_delta = 0;
++	arinc429_stats.rx_frames_delta = 0;
++	arinc429_stats.matches_delta   = 0;
++
++	/* restart timer (one second) */
++	mod_timer(&arinc429_stattimer, round_jiffies(jiffies + HZ));
++}
++
++/*
++ * proc read functions
++ */
++
++static void arinc429_print_rcvlist(struct seq_file *m,
++				   struct hlist_head *rx_list,
++				   struct net_device *dev)
++{
++	struct receiver *r;
++
++	seq_puts(m, "  device      label  mask  function  userdata   matches  ident\n");
++
++	hlist_for_each_entry_rcu(r, rx_list, list) {
++		char *fmt = "   %-5s     %02x     %02x   %pK  %pK  %8ld  %s\n";
++
++		seq_printf(m, fmt, DNAME(dev), r->label, r->mask,
++			   r->func, r->data, r->matches, r->ident);
++	}
++}
++
++static int arinc429_stats_proc_show(struct seq_file *m, void *v)
++{
++	seq_putc(m, '\n');
++	seq_printf(m, " %8ld transmitted frames (TXF)\n",
++		   arinc429_stats.tx_frames);
++	seq_printf(m, " %8ld received frames (RXF)\n",
++		   arinc429_stats.rx_frames);
++	seq_printf(m, " %8ld matched frames (RXMF)\n",
++		   arinc429_stats.matches);
++
++	seq_putc(m, '\n');
++
++	if (arinc429_stattimer.function == arinc429_stat_update) {
++		seq_printf(m, " %8ld %% total match ratio (RXMR)\n",
++			   arinc429_stats.total_rx_match_ratio);
++
++		seq_printf(m, " %8ld frames/s total tx rate (TXR)\n",
++			   arinc429_stats.total_tx_rate);
++		seq_printf(m, " %8ld frames/s total rx rate (RXR)\n",
++			   arinc429_stats.total_rx_rate);
++
++		seq_putc(m, '\n');
++
++		seq_printf(m, " %8ld %% current match ratio (CRXMR)\n",
++			   arinc429_stats.current_rx_match_ratio);
++
++		seq_printf(m, " %8ld frames/s current tx rate (CTXR)\n",
++			   arinc429_stats.current_tx_rate);
++		seq_printf(m, " %8ld frames/s current rx rate (CRXR)\n",
++			   arinc429_stats.current_rx_rate);
++
++		seq_putc(m, '\n');
++
++		seq_printf(m, " %8ld %% max match ratio (MRXMR)\n",
++			   arinc429_stats.max_rx_match_ratio);
++
++		seq_printf(m, " %8ld frames/s max tx rate (MTXR)\n",
++			   arinc429_stats.max_tx_rate);
++		seq_printf(m, " %8ld frames/s max rx rate (MRXR)\n",
++			   arinc429_stats.max_rx_rate);
++
++		seq_putc(m, '\n');
++	}
++
++	seq_printf(m, " %8ld current receive list entries (CRCV)\n",
++		   arinc429_pstats.rcv_entries);
++	seq_printf(m, " %8ld maximum receive list entries (MRCV)\n",
++		   arinc429_pstats.rcv_entries_max);
++
++	if (arinc429_pstats.stats_reset)
++		seq_printf(m, "\n %8ld statistic resets (STR)\n",
++			   arinc429_pstats.stats_reset);
++
++	if (arinc429_pstats.user_reset)
++		seq_printf(m, " %8ld user statistic resets (USTR)\n",
++			   arinc429_pstats.user_reset);
++
++	seq_putc(m, '\n');
++	return 0;
++}
++
++static int arinc429_stats_proc_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, arinc429_stats_proc_show, NULL);
++}
++
++static const struct file_operations arinc429_stats_proc_fops = {
++	.owner		= THIS_MODULE,
++	.open		= arinc429_stats_proc_open,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
++static int arinc429_reset_stats_proc_show(struct seq_file *m, void *v)
++{
++	user_reset = 1;
++
++	if (arinc429_stattimer.function == arinc429_stat_update) {
++		seq_printf(m, "Scheduled statistic reset #%ld.\n",
++			   arinc429_pstats.stats_reset + 1);
++
++	} else {
++		if (arinc429_stats.jiffies_init != jiffies)
++			arinc429_init_stats();
++
++		seq_printf(m, "Performed statistic reset #%ld.\n",
++			   arinc429_pstats.stats_reset);
++	}
++	return 0;
++}
++
++static int arinc429_reset_stats_proc_open(struct inode *inode,
++					  struct file *file)
++{
++	return single_open(file, arinc429_reset_stats_proc_show, NULL);
++}
++
++static const struct file_operations arinc429_reset_stats_proc_fops = {
++	.owner		= THIS_MODULE,
++	.open		= arinc429_reset_stats_proc_open,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
++static int arinc429_version_proc_show(struct seq_file *m, void *v)
++{
++	seq_printf(m, "%s\n", ARINC429_VERSION_STRING);
++	return 0;
++}
++
++static int arinc429_version_proc_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, arinc429_version_proc_show, NULL);
++}
++
++static const struct file_operations arinc429_version_proc_fops = {
++	.owner		= THIS_MODULE,
++	.open		= arinc429_version_proc_open,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
++static inline void arinc429_rcvlist_proc_show_one(struct seq_file *m, int idx,
++						  struct net_device *dev,
++						  struct dev_rcv_lists *d)
++{
++	if (!hlist_empty(&d->rx[idx]))
++		arinc429_print_rcvlist(m, &d->rx[idx], dev);
++	else
++		seq_printf(m, "  (%s: no entry)\n", DNAME(dev));
++}
++
++static int arinc429_rcvlist_proc_show(struct seq_file *m, void *v)
++{
++	/* double cast to prevent GCC warning */
++	int idx = (int)(long)m->private;
++	struct net_device *dev;
++	struct dev_rcv_lists *d;
++
++	seq_printf(m, "\nreceive list '%s':\n", rx_list_name[idx]);
++
++	rcu_read_lock();
++
++	/* receive list for 'all' ARINC429 devices (dev == NULL) */
++	d = &arinc429_rx_alldev_list;
++	arinc429_rcvlist_proc_show_one(m, idx, NULL, d);
++
++	/* receive list for registered ARINC429 devices */
++	for_each_netdev_rcu(&init_net, dev) {
++		if (dev->type == ARPHRD_ARINC429 && dev->ml_priv)
++			arinc429_rcvlist_proc_show_one(m, idx, dev,
++						       dev->ml_priv);
++	}
++
++	rcu_read_unlock();
++
++	seq_putc(m, '\n');
++	return 0;
++}
++
++static int arinc429_rcvlist_proc_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, arinc429_rcvlist_proc_show, PDE_DATA(inode));
++}
++
++static const struct file_operations arinc429_rcvlist_proc_fops = {
++	.owner		= THIS_MODULE,
++	.open		= arinc429_rcvlist_proc_open,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
++/*
++ * proc utility functions
++ */
++
++static void arinc429_remove_proc_readentry(const char *name)
++{
++	if (arinc429_dir)
++		remove_proc_entry(name, arinc429_dir);
++}
++
++/*
++ * arinc429_init_proc - create main ARINC429 proc directory and procfs entries
++ */
++void arinc429_init_proc(void)
++{
++	/* create /proc/net/arinc429 directory */
++	arinc429_dir = proc_mkdir("arinc429", init_net.proc_net);
++
++	if (!arinc429_dir) {
++		pr_info("arinc429: failed to create /proc/net/arinc429 . CONFIG_PROC_FS missing?\n");
++		return;
++	}
++
++	/* own procfs entries from the AF_ARINC429 core */
++	pde_version     = proc_create(ARINC429_PROC_VERSION, 0644,
++				      arinc429_dir,
++				      &arinc429_version_proc_fops);
++	pde_stats       = proc_create(ARINC429_PROC_STATS, 0644,
++				      arinc429_dir,
++				      &arinc429_stats_proc_fops);
++	pde_reset_stats = proc_create(ARINC429_PROC_RESET_STATS, 0644,
++				      arinc429_dir,
++				      &arinc429_reset_stats_proc_fops);
++	pde_rcvlist_all = proc_create_data(ARINC429_PROC_RCVLIST_ALL, 0644,
++					   arinc429_dir,
++					   &arinc429_rcvlist_proc_fops,
++					   (void *)RX_ALL);
++	pde_rcvlist_fil = proc_create_data(ARINC429_PROC_RCVLIST_FIL, 0644,
++					   arinc429_dir,
++					   &arinc429_rcvlist_proc_fops,
++					   (void *)RX_FIL);
++	pde_rcvlist_inv = proc_create_data(ARINC429_PROC_RCVLIST_INV, 0644,
++					   arinc429_dir,
++					   &arinc429_rcvlist_proc_fops,
++					   (void *)RX_INV);
++}
++
++/*
++ * arinc429_remove_proc - remove procfs entries and main ARINC429 proc directory
++ */
++void arinc429_remove_proc(void)
++{
++	if (pde_version)
++		arinc429_remove_proc_readentry(ARINC429_PROC_VERSION);
++
++	if (pde_stats)
++		arinc429_remove_proc_readentry(ARINC429_PROC_STATS);
++
++	if (pde_reset_stats)
++		arinc429_remove_proc_readentry(ARINC429_PROC_RESET_STATS);
++
++	if (pde_rcvlist_all)
++		arinc429_remove_proc_readentry(ARINC429_PROC_RCVLIST_ALL);
++
++	if (pde_rcvlist_fil)
++		arinc429_remove_proc_readentry(ARINC429_PROC_RCVLIST_FIL);
++
++	if (pde_rcvlist_inv)
++		arinc429_remove_proc_readentry(ARINC429_PROC_RCVLIST_INV);
++
++	if (arinc429_dir)
++		remove_proc_entry("arinc429", init_net.proc_net);
++}
+diff --git a/net/arinc429/raw.c b/net/arinc429/raw.c
+new file mode 100644
+index 0000000..82e057b
+--- /dev/null
++++ b/net/arinc429/raw.c
+@@ -0,0 +1,758 @@
++/*
++ * raw.c - Raw sockets for protocol family ARINC429
++ *
++ * Copyright (C) 2015 Marek Vasut <marex@denx.de>
++ *
++ * Based on the SocketCAN stack.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of
++ * the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/uio.h>
++#include <linux/net.h>
++#include <linux/slab.h>
++#include <linux/netdevice.h>
++#include <linux/socket.h>
++#include <linux/if_arp.h>
++#include <linux/skbuff.h>
++#include <linux/arinc429.h>
++#include <linux/arinc429/core.h>
++#include <linux/arinc429/skb.h>
++#include <linux/arinc429/raw.h>
++#include <net/sock.h>
++#include <net/net_namespace.h>
++
++#define ARINC429_RAW_VERSION ARINC429_VERSION
++
++MODULE_DESCRIPTION("PF_ARINC429 raw protocol");
++MODULE_LICENSE("GPL v2");
++MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
++MODULE_ALIAS("arinc429-proto-1");
++
++/*
++ * A raw socket has a list of arinc429_filters attached to it, each receiving
++ * the ARINC429 frames matching that filter.  If the filter list is empty,
++ * no ARINC429 frames will be received by the socket.  The default after
++ * opening the socket, is to have one filter which receives all frames.
++ * The filter list is allocated dynamically with the exception of the
++ * list containing only one item.  This common case is optimized by
++ * storing the single filter in dfilter, to avoid using dynamic memory.
++ */
++
++struct uniqframe {
++	ktime_t tstamp;
++	const struct sk_buff *skb;
++	unsigned int join_rx_count;
++};
++
++struct raw_sock {
++	struct sock sk;
++	int bound;
++	int ifindex;
++	struct notifier_block notifier;
++	int loopback;
++	int recv_own_msgs;
++	int join_filters;
++	int count;                 /* number of active filters */
++	struct arinc429_filter dfilter; /* default/single filter */
++	struct arinc429_filter *filter; /* pointer to filter(s) */
++	struct uniqframe __percpu *uniq;
++};
++
++/*
++ * Return pointer to store the extra msg flags for raw_recvmsg().
++ * We use the space of one unsigned int beyond the 'struct sockaddr_arinc429'
++ * in skb->cb.
++ */
++static inline unsigned int *raw_flags(struct sk_buff *skb)
++{
++	sock_skb_cb_check_size(sizeof(struct sockaddr_arinc429) +
++			       sizeof(unsigned int));
++
++	/* return pointer after struct sockaddr_arinc429 */
++	return (unsigned int *)(&((struct sockaddr_arinc429 *)skb->cb)[1]);
++}
++
++static inline struct raw_sock *raw_sk(const struct sock *sk)
++{
++	return (struct raw_sock *)sk;
++}
++
++static void raw_rcv(struct sk_buff *oskb, void *data)
++{
++	struct sock *sk = (struct sock *)data;
++	struct raw_sock *ro = raw_sk(sk);
++	struct sockaddr_arinc429 *addr;
++	struct sk_buff *skb;
++	unsigned int *pflags;
++
++	/* check the received tx sock reference */
++	if (!ro->recv_own_msgs && oskb->sk == sk)
++		return;
++
++	/* do not pass non-ARINC429 frames to a socket */
++	if (oskb->len != ARINC429_MTU)
++		return;
++
++	/* eliminate multiple filter matches for the same skb */
++	if (this_cpu_ptr(ro->uniq)->skb == oskb &&
++	    ktime_equal(this_cpu_ptr(ro->uniq)->tstamp, oskb->tstamp)) {
++		if (ro->join_filters) {
++			this_cpu_inc(ro->uniq->join_rx_count);
++			/* drop frame until all enabled filters matched */
++			if (this_cpu_ptr(ro->uniq)->join_rx_count < ro->count)
++				return;
++		} else {
++			return;
++		}
++	} else {
++		this_cpu_ptr(ro->uniq)->skb = oskb;
++		this_cpu_ptr(ro->uniq)->tstamp = oskb->tstamp;
++		this_cpu_ptr(ro->uniq)->join_rx_count = 1;
++		/* drop first frame to check all enabled filters? */
++		if (ro->join_filters && ro->count > 1)
++			return;
++	}
++
++	/* clone the given skb to be able to enqueue it into the rcv queue */
++	skb = skb_clone(oskb, GFP_ATOMIC);
++	if (!skb)
++		return;
++
++	/*
++	 *  Put the datagram to the queue so that raw_recvmsg() can
++	 *  get it from there.  We need to pass the interface index to
++	 *  raw_recvmsg().  We pass a whole struct sockaddr_arinc429 in skb->cb
++	 *  containing the interface index.
++	 */
++
++	sock_skb_cb_check_size(sizeof(struct sockaddr_arinc429));
++	addr = (struct sockaddr_arinc429 *)skb->cb;
++	memset(addr, 0, sizeof(*addr));
++	addr->arinc429_family  = AF_ARINC429;
++	addr->arinc429_ifindex = skb->dev->ifindex;
++
++	/* add ARINC429 specific message flags for raw_recvmsg() */
++	pflags = raw_flags(skb);
++	*pflags = 0;
++	if (oskb->sk)
++		*pflags |= MSG_DONTROUTE;
++	if (oskb->sk == sk)
++		*pflags |= MSG_CONFIRM;
++
++	if (sock_queue_rcv_skb(sk, skb) < 0)
++		kfree_skb(skb);
++}
++
++static int raw_enable_filters(struct net_device *dev, struct sock *sk,
++			      struct arinc429_filter *filter, int count)
++{
++	int err = 0;
++	int i;
++
++	for (i = 0; i < count; i++) {
++		err = arinc429_rx_register(dev, &filter[i], raw_rcv, sk, "raw");
++		if (err) {
++			/* clean up successfully registered filters */
++			while (--i >= 0)
++				arinc429_rx_unregister(dev, &filter[i],
++						       raw_rcv, sk);
++			break;
++		}
++	}
++
++	return err;
++}
++
++static void raw_disable_filters(struct net_device *dev, struct sock *sk,
++				struct arinc429_filter *filter, int count)
++{
++	int i;
++
++	for (i = 0; i < count; i++)
++		arinc429_rx_unregister(dev, &filter[i], raw_rcv, sk);
++}
++
++static inline void raw_disable_allfilters(struct net_device *dev,
++					  struct sock *sk)
++{
++	struct raw_sock *ro = raw_sk(sk);
++
++	raw_disable_filters(dev, sk, ro->filter, ro->count);
++}
++
++static int raw_enable_allfilters(struct net_device *dev, struct sock *sk)
++{
++	struct raw_sock *ro = raw_sk(sk);
++	int err;
++
++	err = raw_enable_filters(dev, sk, ro->filter, ro->count);
++
++	return err;
++}
++
++static int raw_notifier(struct notifier_block *nb,
++			unsigned long msg, void *ptr)
++{
++	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
++	struct raw_sock *ro = container_of(nb, struct raw_sock, notifier);
++	struct sock *sk = &ro->sk;
++
++	if (!net_eq(dev_net(dev), &init_net))
++		return NOTIFY_DONE;
++
++	if (dev->type != ARPHRD_ARINC429)
++		return NOTIFY_DONE;
++
++	if (ro->ifindex != dev->ifindex)
++		return NOTIFY_DONE;
++
++	switch (msg) {
++	case NETDEV_UNREGISTER:
++		lock_sock(sk);
++		/* remove current filters & unregister */
++		if (ro->bound)
++			raw_disable_allfilters(dev, sk);
++
++		if (ro->count > 1)
++			kfree(ro->filter);
++
++		ro->ifindex = 0;
++		ro->bound   = 0;
++		ro->count   = 0;
++		release_sock(sk);
++
++		sk->sk_err = ENODEV;
++		if (!sock_flag(sk, SOCK_DEAD))
++			sk->sk_error_report(sk);
++		break;
++
++	case NETDEV_DOWN:
++		sk->sk_err = ENETDOWN;
++		if (!sock_flag(sk, SOCK_DEAD))
++			sk->sk_error_report(sk);
++		break;
++	}
++
++	return NOTIFY_DONE;
++}
++
++static int raw_init(struct sock *sk)
++{
++	struct raw_sock *ro = raw_sk(sk);
++
++	ro->bound            = 0;
++	ro->ifindex          = 0;
++
++	/* set default filter to single entry dfilter */
++	ro->dfilter.label    = 0;
++	ro->dfilter.mask     = 0;
++	ro->filter           = &ro->dfilter;
++	ro->count            = 1;
++
++	/* set default loopback behaviour */
++	ro->loopback         = 1;
++	ro->recv_own_msgs    = 0;
++	ro->join_filters     = 0;
++
++	/* alloc_percpu provides zero'ed memory */
++	ro->uniq = alloc_percpu(struct uniqframe);
++	if (unlikely(!ro->uniq))
++		return -ENOMEM;
++
++	/* set notifier */
++	ro->notifier.notifier_call = raw_notifier;
++
++	register_netdevice_notifier(&ro->notifier);
++
++	return 0;
++}
++
++static int raw_release(struct socket *sock)
++{
++	struct sock *sk = sock->sk;
++	struct raw_sock *ro;
++
++	if (!sk)
++		return 0;
++
++	ro = raw_sk(sk);
++
++	unregister_netdevice_notifier(&ro->notifier);
++
++	lock_sock(sk);
++
++	/* remove current filters & unregister */
++	if (ro->bound) {
++		if (ro->ifindex) {
++			struct net_device *dev;
++
++			dev = dev_get_by_index(&init_net, ro->ifindex);
++			if (dev) {
++				raw_disable_allfilters(dev, sk);
++				dev_put(dev);
++			}
++		} else {
++			raw_disable_allfilters(NULL, sk);
++		}
++	}
++
++	if (ro->count > 1)
++		kfree(ro->filter);
++
++	ro->ifindex = 0;
++	ro->bound   = 0;
++	ro->count   = 0;
++	free_percpu(ro->uniq);
++
++	sock_orphan(sk);
++	sock->sk = NULL;
++
++	release_sock(sk);
++	sock_put(sk);
++
++	return 0;
++}
++
++static int raw_bind(struct socket *sock, struct sockaddr *uaddr, int len)
++{
++	struct sockaddr_arinc429 *addr = (struct sockaddr_arinc429 *)uaddr;
++	struct sock *sk = sock->sk;
++	struct raw_sock *ro = raw_sk(sk);
++	int ifindex;
++	int err = 0;
++	int notify_enetdown = 0;
++
++	if (len < sizeof(*addr))
++		return -EINVAL;
++
++	lock_sock(sk);
++
++	if (ro->bound && addr->arinc429_ifindex == ro->ifindex)
++		goto out;
++
++	if (addr->arinc429_ifindex) {
++		struct net_device *dev;
++
++		dev = dev_get_by_index(&init_net, addr->arinc429_ifindex);
++		if (!dev) {
++			err = -ENODEV;
++			goto out;
++		}
++		if (dev->type != ARPHRD_ARINC429) {
++			dev_put(dev);
++			err = -ENODEV;
++			goto out;
++		}
++		if (!(dev->flags & IFF_UP))
++			notify_enetdown = 1;
++
++		ifindex = dev->ifindex;
++
++		/* filters set by default/setsockopt */
++		err = raw_enable_allfilters(dev, sk);
++		dev_put(dev);
++	} else {
++		ifindex = 0;
++
++		/* filters set by default/setsockopt */
++		err = raw_enable_allfilters(NULL, sk);
++	}
++
++	if (!err) {
++		if (ro->bound) {
++			/* unregister old filters */
++			if (ro->ifindex) {
++				struct net_device *dev;
++
++				dev = dev_get_by_index(&init_net, ro->ifindex);
++				if (dev) {
++					raw_disable_allfilters(dev, sk);
++					dev_put(dev);
++				}
++			} else {
++				raw_disable_allfilters(NULL, sk);
++			}
++		}
++		ro->ifindex = ifindex;
++		ro->bound = 1;
++	}
++
++ out:
++	release_sock(sk);
++
++	if (notify_enetdown) {
++		sk->sk_err = ENETDOWN;
++		if (!sock_flag(sk, SOCK_DEAD))
++			sk->sk_error_report(sk);
++	}
++
++	return err;
++}
++
++static int raw_getname(struct socket *sock, struct sockaddr *uaddr,
++		       int *len, int peer)
++{
++	struct sockaddr_arinc429 *addr = (struct sockaddr_arinc429 *)uaddr;
++	struct sock *sk = sock->sk;
++	struct raw_sock *ro = raw_sk(sk);
++
++	if (peer)
++		return -EOPNOTSUPP;
++
++	memset(addr, 0, sizeof(*addr));
++	addr->arinc429_family  = AF_ARINC429;
++	addr->arinc429_ifindex = ro->ifindex;
++
++	*len = sizeof(*addr);
++
++	return 0;
++}
++
++static int raw_setsockopt(struct socket *sock, int level, int optname,
++			  char __user *optval, unsigned int optlen)
++{
++	struct sock *sk = sock->sk;
++	struct raw_sock *ro = raw_sk(sk);
++	struct arinc429_filter *filter = NULL;  /* dyn. alloc'ed filters */
++	struct arinc429_filter sfilter;         /* single filter */
++	struct net_device *dev = NULL;
++	int count = 0;
++	int err = 0;
++
++	if (level != SOL_ARINC429_RAW)
++		return -EINVAL;
++
++	switch (optname) {
++	case ARINC429_RAW_FILTER:
++		if (optlen % sizeof(struct arinc429_filter) != 0)
++			return -EINVAL;
++
++		count = optlen / sizeof(struct arinc429_filter);
++
++		if (count > 1) {
++			/* filter does not fit into dfilter => alloc space */
++			filter = memdup_user(optval, optlen);
++			if (IS_ERR(filter))
++				return PTR_ERR(filter);
++		} else if (count == 1) {
++			if (copy_from_user(&sfilter, optval, sizeof(sfilter)))
++				return -EFAULT;
++		}
++
++		lock_sock(sk);
++
++		if (ro->bound && ro->ifindex)
++			dev = dev_get_by_index(&init_net, ro->ifindex);
++
++		if (ro->bound) {
++			/* (try to) register the new filters */
++			if (count == 1)
++				err = raw_enable_filters(dev, sk, &sfilter, 1);
++			else
++				err = raw_enable_filters(dev, sk, filter,
++							 count);
++			if (err) {
++				if (count > 1)
++					kfree(filter);
++				goto out_fil;
++			}
++
++			/* remove old filter registrations */
++			raw_disable_filters(dev, sk, ro->filter, ro->count);
++		}
++
++		/* remove old filter space */
++		if (ro->count > 1)
++			kfree(ro->filter);
++
++		/* link new filters to the socket */
++		if (count == 1) {
++			/* copy filter data for single filter */
++			ro->dfilter = sfilter;
++			filter = &ro->dfilter;
++		}
++		ro->filter = filter;
++		ro->count  = count;
++
++ out_fil:
++		if (dev)
++			dev_put(dev);
++
++		release_sock(sk);
++
++		break;
++
++	case ARINC429_RAW_LOOPBACK:
++		if (optlen != sizeof(ro->loopback))
++			return -EINVAL;
++
++		if (copy_from_user(&ro->loopback, optval, optlen))
++			return -EFAULT;
++
++		break;
++
++	case ARINC429_RAW_RECV_OWN_MSGS:
++		if (optlen != sizeof(ro->recv_own_msgs))
++			return -EINVAL;
++
++		if (copy_from_user(&ro->recv_own_msgs, optval, optlen))
++			return -EFAULT;
++
++		break;
++
++	case ARINC429_RAW_JOIN_FILTERS:
++		if (optlen != sizeof(ro->join_filters))
++			return -EINVAL;
++
++		if (copy_from_user(&ro->join_filters, optval, optlen))
++			return -EFAULT;
++
++		break;
++
++	default:
++		return -ENOPROTOOPT;
++	}
++	return err;
++}
++
++static int raw_getsockopt(struct socket *sock, int level, int optname,
++			  char __user *optval, int __user *optlen)
++{
++	struct sock *sk = sock->sk;
++	struct raw_sock *ro = raw_sk(sk);
++	int len;
++	void *val;
++	int err = 0;
++
++	if (level != SOL_ARINC429_RAW)
++		return -EINVAL;
++	if (get_user(len, optlen))
++		return -EFAULT;
++	if (len < 0)
++		return -EINVAL;
++
++	switch (optname) {
++	case ARINC429_RAW_FILTER:
++		lock_sock(sk);
++		if (ro->count > 0) {
++			int fsize = ro->count * sizeof(struct arinc429_filter);
++
++			if (len > fsize)
++				len = fsize;
++			if (copy_to_user(optval, ro->filter, len))
++				err = -EFAULT;
++		} else {
++			len = 0;
++		}
++		release_sock(sk);
++
++		if (!err)
++			err = put_user(len, optlen);
++		return err;
++
++	case ARINC429_RAW_LOOPBACK:
++		if (len > sizeof(int))
++			len = sizeof(int);
++		val = &ro->loopback;
++		break;
++
++	case ARINC429_RAW_RECV_OWN_MSGS:
++		if (len > sizeof(int))
++			len = sizeof(int);
++		val = &ro->recv_own_msgs;
++		break;
++
++	case ARINC429_RAW_JOIN_FILTERS:
++		if (len > sizeof(int))
++			len = sizeof(int);
++		val = &ro->join_filters;
++		break;
++
++	default:
++		return -ENOPROTOOPT;
++	}
++
++	if (put_user(len, optlen))
++		return -EFAULT;
++	if (copy_to_user(optval, val, len))
++		return -EFAULT;
++	return 0;
++}
++
++static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
++{
++	struct sock *sk = sock->sk;
++	struct raw_sock *ro = raw_sk(sk);
++	struct sk_buff *skb;
++	struct net_device *dev;
++	int ifindex;
++	int err;
++
++	if (msg->msg_name) {
++		DECLARE_SOCKADDR(struct sockaddr_arinc429 *, addr,
++				 msg->msg_name);
++
++		if (msg->msg_namelen < sizeof(*addr))
++			return -EINVAL;
++
++		if (addr->arinc429_family != AF_ARINC429)
++			return -EINVAL;
++
++		ifindex = addr->arinc429_ifindex;
++	} else {
++		ifindex = ro->ifindex;
++	}
++
++	if (unlikely(size != ARINC429_MTU))
++		return -EINVAL;
++
++	dev = dev_get_by_index(&init_net, ifindex);
++	if (!dev)
++		return -ENXIO;
++
++	skb = sock_alloc_send_skb(sk, size + sizeof(struct arinc429_skb_priv),
++				  msg->msg_flags & MSG_DONTWAIT, &err);
++	if (!skb)
++		goto put_dev;
++
++	arinc429_skb_reserve(skb);
++	arinc429_skb_prv(skb)->ifindex = dev->ifindex;
++
++	err = memcpy_from_msg(skb_put(skb, size), msg, size);
++	if (err < 0)
++		goto free_skb;
++
++	sock_tx_timestamp(sk, &skb_shinfo(skb)->tx_flags);
++
++	skb->dev = dev;
++	skb->sk  = sk;
++	skb->priority = sk->sk_priority;
++
++	err = arinc429_send(skb, ro->loopback);
++
++	dev_put(dev);
++
++	if (err)
++		goto send_failed;
++
++	return size;
++
++free_skb:
++	kfree_skb(skb);
++put_dev:
++	dev_put(dev);
++send_failed:
++	return err;
++}
++
++static int raw_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
++		       int flags)
++{
++	struct sock *sk = sock->sk;
++	struct sk_buff *skb;
++	int err = 0;
++	int noblock;
++
++	noblock =  flags & MSG_DONTWAIT;
++	flags   &= ~MSG_DONTWAIT;
++
++	skb = skb_recv_datagram(sk, flags, noblock, &err);
++	if (!skb)
++		return err;
++
++	if (size < skb->len)
++		msg->msg_flags |= MSG_TRUNC;
++	else
++		size = skb->len;
++
++	err = memcpy_to_msg(msg, skb->data, size);
++	if (err < 0) {
++		skb_free_datagram(sk, skb);
++		return err;
++	}
++
++	sock_recv_ts_and_drops(msg, sk, skb);
++
++	if (msg->msg_name) {
++		__sockaddr_check_size(sizeof(struct sockaddr_arinc429));
++		msg->msg_namelen = sizeof(struct sockaddr_arinc429);
++		memcpy(msg->msg_name, skb->cb, msg->msg_namelen);
++	}
++
++	/* assign the flags that have been recorded in raw_rcv() */
++	msg->msg_flags |= *(raw_flags(skb));
++
++	skb_free_datagram(sk, skb);
++
++	return size;
++}
++
++static const struct proto_ops raw_ops = {
++	.family        = PF_ARINC429,
++	.release       = raw_release,
++	.bind          = raw_bind,
++	.connect       = sock_no_connect,
++	.socketpair    = sock_no_socketpair,
++	.accept        = sock_no_accept,
++	.getname       = raw_getname,
++	.poll          = datagram_poll,
++	/* use arinc429_ioctl() from af_arinc429.c */
++	.ioctl         = arinc429_ioctl,
++	.listen        = sock_no_listen,
++	.shutdown      = sock_no_shutdown,
++	.setsockopt    = raw_setsockopt,
++	.getsockopt    = raw_getsockopt,
++	.sendmsg       = raw_sendmsg,
++	.recvmsg       = raw_recvmsg,
++	.mmap          = sock_no_mmap,
++	.sendpage      = sock_no_sendpage,
++};
++
++static struct proto raw_proto __read_mostly = {
++	.name       = "ARINC429_RAW",
++	.owner      = THIS_MODULE,
++	.obj_size   = sizeof(struct raw_sock),
++	.init       = raw_init,
++};
++
++static const struct arinc429_proto raw_arinc429_proto = {
++	.type       = SOCK_RAW,
++	.protocol   = ARINC429_RAW,
++	.ops        = &raw_ops,
++	.prot       = &raw_proto,
++};
++
++static __init int raw_module_init(void)
++{
++	int err;
++
++	pr_info("arinc429: raw protocol (rev " ARINC429_RAW_VERSION ")\n");
++
++	err = arinc429_proto_register(&raw_arinc429_proto);
++	if (err < 0)
++		pr_err("arinc429: registration of raw protocol failed\n");
++
++	return err;
++}
++
++static __exit void raw_module_exit(void)
++{
++	arinc429_proto_unregister(&raw_arinc429_proto);
++}
++
++module_init(raw_module_init);
++module_exit(raw_module_exit);
