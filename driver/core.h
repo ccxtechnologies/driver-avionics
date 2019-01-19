@@ -12,7 +12,7 @@
 #ifndef __ARINC429_CORE_H__
 #define __ARINC429_CORE_H__
 
-#include <linux/arinc429.h>
+#include "arinc429.h"
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 

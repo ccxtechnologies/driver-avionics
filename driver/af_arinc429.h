@@ -24,7 +24,7 @@
 #include <linux/netdevice.h>
 #include <linux/list.h>
 #include <linux/rcupdate.h>
-#include <linux/arinc429.h>
+#include "arinc429.h"
 
 /* af_arinc429 rx dispatcher structures */
 

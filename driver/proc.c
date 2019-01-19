@@ -24,7 +24,7 @@
 #include <linux/list.h>
 #include <linux/rcupdate.h>
 #include <linux/if_arp.h>
-#include <linux/arinc429/core.h>
+#include "core.h"
 
 #include "af_arinc429.h"
 

@@ -28,10 +28,10 @@
 #include <linux/socket.h>
 #include <linux/if_arp.h>
 #include <linux/skbuff.h>
-#include <linux/arinc429.h>
-#include <linux/arinc429/core.h>
-#include <linux/arinc429/skb.h>
-#include <linux/arinc429/raw.h>
+#include "arinc429.h"
+#include "core.h"
+#include "skb.h"
+#include "raw.h"
 #include <net/sock.h>
 #include <net/net_namespace.h>
 

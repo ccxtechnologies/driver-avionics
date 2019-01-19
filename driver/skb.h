@@ -13,7 +13,7 @@
 
 #include <linux/types.h>
 #include <linux/skbuff.h>
-#include <linux/arinc429.h>
+#include "arinc429.h"
 #include <net/sock.h>
 
 /*

@@ -21,10 +21,10 @@
 #include <linux/slab.h>
 #include <linux/netdevice.h>
 #include <linux/if_arp.h>
-#include <linux/arinc429.h>
-#include <linux/arinc429/dev.h>
-#include <linux/arinc429/skb.h>
-#include <linux/arinc429/netlink.h>
+#include "arinc429.h"
+#include "dev.h"
+#include "skb.h"
+#include "netlink.h"
 #include <net/rtnetlink.h>
 
 #define MOD_DESC "ARINC429 device driver interface"

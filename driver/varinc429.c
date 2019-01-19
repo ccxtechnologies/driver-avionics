@@ -24,9 +24,9 @@
 #include <linux/netdevice.h>
 #include <linux/if_arp.h>
 #include <linux/if_ether.h>
-#include <linux/arinc429.h>
-#include <linux/arinc429/dev.h>
-#include <linux/arinc429/skb.h>
+#include "arinc429.h"
+#include "dev.h"
+#include "skb.h"
 #include <linux/slab.h>
 #include <net/rtnetlink.h>
 

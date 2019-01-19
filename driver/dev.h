@@ -11,8 +11,8 @@
 #ifndef __ARINC429_DEV_H__
 #define __ARINC429_DEV_H__
 
-#include <linux/arinc429.h>
-#include <linux/arinc429/netlink.h>
+#include "arinc429.h"
+#include "netlink.h"
 
 /*
  * ARINC429 mode

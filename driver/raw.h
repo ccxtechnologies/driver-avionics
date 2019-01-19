@@ -20,7 +20,7 @@
 #ifndef _UAPI_ARINC429_RAW_H
 #define _UAPI_ARINC429_RAW_H
 
-#include <linux/arinc429.h>
+#include "arinc429.h"
 
 #define SOL_ARINC429_RAW (SOL_ARINC429_BASE + ARINC429_RAW)
 
