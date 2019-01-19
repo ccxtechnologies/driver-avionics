@@ -24,6 +24,35 @@
 #include <linux/types.h>
 #include <linux/socket.h>
 
+/************************************************************************
+ * This is an ugly hack so that we can build this out of tree without
+ * patching the kernel, delete it and put these definions in the propper
+ * place if this is ever pulled into a kernel. */
+
+/* should be in include/linux/socket.h, and should have it's own
+ * index, not stealing from Ash (which is unused) */
+#ifndef AF_ARINC429
+#define AF_ARINC429		AF_ASH
+#endif
+
+/* should be in include/linux/socket.h, and should have it's own
+ * index, not stealing from Ash (which is unused) */
+#ifndef PF_ARINC429
+#define PF_ARINC429		AF_ARINC429
+#endif
+
+/* should be in include/uapi/linux/if_arp.h */
+#ifndef ARPHRD_ARINC429
+#define ARPHRD_ARINC429	281
+#endif
+
+/* should be in include/uapi/linux/if_ether.h */
+#ifndef ETH_P_ARINC429
+#define ETH_P_ARINC429	0x001D
+#endif
+
+/************************************************************************/
+
 /* ARINC429 kernel definitions */
 
 /*
