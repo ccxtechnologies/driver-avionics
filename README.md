@@ -13,3 +13,8 @@ AF\_index and PF\_index to socket.h, an ARPHRD\_index to if\_arp.h, and an ETH\_
 
 Since we would prefer this to be an out-of-tree driver (at least for now) we reuse existing but
 unused indexes for Ash. Refer to arinc429.h for more details on this ugly hack.
+
+# Kernel Version
+
+All development and testing was done on 4.9+, this can probably work on an older
+kernel but will probably require some updates.
