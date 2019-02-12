@@ -32,7 +32,8 @@
  */
 struct arinc429_skb_priv {
 	int			ifindex;
-	struct arinc429_frame	af[0];
+	size_t			words;
+	struct arinc429_word	af[0];
 };
 
 static inline struct arinc429_skb_priv *arinc429_skb_prv(struct sk_buff *skb)

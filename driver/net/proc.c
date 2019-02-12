@@ -35,7 +35,8 @@
 #define ARINC429_PROC_VERSION     "version"
 #define ARINC429_PROC_STATS       "stats"
 #define ARINC429_PROC_RESET_STATS "reset_stats"
-#define ARINC429_PROC_RCVLIST_ALL "rcvlist_all"
+#define ARINC429_PROC_RCVLIST_ALL "rcv
+list_all"
 #define ARINC429_PROC_RCVLIST_FIL "rcvlist_fil"
 #define ARINC429_PROC_RCVLIST_INV "rcvlist_inv"
 

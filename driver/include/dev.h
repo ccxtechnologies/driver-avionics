@@ -4,6 +4,7 @@
  * Definitions for the ARINC429 network device driver interface
  *
  * Copyright (C) 2015 Marek Vasut <marex@denx.de>
+ * Updates Copyright (C) 2019 CCX Technologies Inc. <charles@ccxtechnologies.com>
  *
  * Based on the SocketCAN stack.
  */
@@ -28,8 +29,8 @@ enum arinc429_mode {
  */
 struct arinc429_priv {
 	struct arinc429_rate rate;
-	u32 ctrlmode;
-	u32 ctrlmode_supported;
+	__u32 ctrlmode;
+	__u32 ctrlmode_supported;
 
 	int (*do_set_rate)(struct net_device *dev);
 	int (*do_set_mode)(struct net_device *dev, enum arinc429_mode mode);
@@ -43,7 +44,7 @@ static inline int arinc429_dropped_invalid_skb(struct net_device *dev,
 					       struct sk_buff *skb)
 {
 	if (skb->protocol == htons(ETH_P_ARINC429)) {
-		if (unlikely(skb->len != ARINC429_MTU))
+		if (unlikely(skb->len % ARINC429_WORD_SIZE))
 			goto inval_skb;
 	} else
 		goto inval_skb;

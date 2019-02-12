@@ -63,8 +63,6 @@ struct raw_sock {
 	int bound;
 	int ifindex;
 	struct notifier_block notifier;
-	int loopback;
-	int recv_own_msgs;
 	int join_filters;
 	int count;                 /* number of active filters */
 	struct arinc429_filter dfilter; /* default/single filter */
@@ -99,12 +97,8 @@ static void raw_rcv(struct sk_buff *oskb, void *data)
 	struct sk_buff *skb;
 	unsigned int *pflags;
 
-	/* check the received tx sock reference */
-	if (!ro->recv_own_msgs && oskb->sk == sk)
-		return;
-
 	/* do not pass non-ARINC429 frames to a socket */
-	if (oskb->len != ARINC429_MTU)
+	if (oskb->len % ARINC429_FRAME_SIZE)
 		return;
 
 	/* eliminate multiple filter matches for the same skb */
@@ -263,9 +257,7 @@ static int raw_init(struct sock *sk)
 	ro->filter           = &ro->dfilter;
 	ro->count            = 1;
 
-	/* set default loopback behaviour */
-	ro->loopback         = 1;
-	ro->recv_own_msgs    = 0;
+	/* set default behaviour */
 	ro->join_filters     = 0;
 
 	/* alloc_percpu provides zero'ed memory */
@@ -496,24 +488,6 @@ static int raw_setsockopt(struct socket *sock, int level, int optname,
 
 		break;
 
-	case ARINC429_RAW_LOOPBACK:
-		if (optlen != sizeof(ro->loopback))
-			return -EINVAL;
-
-		if (copy_from_user(&ro->loopback, optval, optlen))
-			return -EFAULT;
-
-		break;
-
-	case ARINC429_RAW_RECV_OWN_MSGS:
-		if (optlen != sizeof(ro->recv_own_msgs))
-			return -EINVAL;
-
-		if (copy_from_user(&ro->recv_own_msgs, optval, optlen))
-			return -EFAULT;
-
-		break;
-
 	case ARINC429_RAW_JOIN_FILTERS:
 		if (optlen != sizeof(ro->join_filters))
 			return -EINVAL;
@@ -564,18 +538,6 @@ static int raw_getsockopt(struct socket *sock, int level, int optname,
 			err = put_user(len, optlen);
 		return err;
 
-	case ARINC429_RAW_LOOPBACK:
-		if (len > sizeof(int))
-			len = sizeof(int);
-		val = &ro->loopback;
-		break;
-
-	case ARINC429_RAW_RECV_OWN_MSGS:
-		if (len > sizeof(int))
-			len = sizeof(int);
-		val = &ro->recv_own_msgs;
-		break;
-
 	case ARINC429_RAW_JOIN_FILTERS:
 		if (len > sizeof(int))
 			len = sizeof(int);
@@ -617,7 +579,7 @@ static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 		ifindex = ro->ifindex;
 	}
 
-	if (unlikely(size != ARINC429_MTU))
+	if (unlikely(size % ARINC429_WORD_SIZE))
 		return -EINVAL;
 
 	dev = dev_get_by_index(&init_net, ifindex);
@@ -631,6 +593,7 @@ static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 
 	arinc429_skb_reserve(skb);
 	arinc429_skb_prv(skb)->ifindex = dev->ifindex;
+	arinc429_skb_prv(skb)->words = size / ARINC429_WORD_SIZE;
 
 	err = memcpy_from_msg(skb_put(skb, size), msg, size);
 	if (err < 0)
@@ -642,7 +605,7 @@ static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 	skb->sk  = sk;
 	skb->priority = sk->sk_priority;
 
-	err = arinc429_send(skb, ro->loopback);
+	err = arinc429_send(skb);
 
 	dev_put(dev);
 

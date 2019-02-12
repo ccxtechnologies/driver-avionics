@@ -34,15 +34,6 @@ MODULE_DESCRIPTION("Virtual ARINC429 interface");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
 
-/*
- * ARINC429 test feature:
- * Enable the echo on driver level for testing the ARINC429 core echo modes.
- */
-
-static bool echo; /* echo testing. Default: 0 (Off) */
-module_param(echo, bool, S_IRUGO);
-MODULE_PARM_DESC(echo, "Echo sent frames (for testing). Default: 0 (Off)");
-
 static void varinc429_rx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct net_device_stats *stats = &dev->stats;
@@ -68,39 +59,17 @@ static netdev_tx_t varinc429_tx(struct sk_buff *skb, struct net_device *dev)
 	if (arinc429_dropped_invalid_skb(dev, skb))
 		return NETDEV_TX_OK;
 
-	stats->tx_packets++;
-	stats->tx_bytes += ARINC429_MTU;
-
-	/* set flag whether this packet has to be looped back */
-	loop = skb->pkt_type == PACKET_LOOPBACK;
-
-	if (!echo) {
-		/* no echo handling available inside this driver */
-
-		if (loop) {
-			/*
-			 * Only count the packets here, because the
-			 * ARINC429 core already did the echo for us
-			 */
-			stats->rx_packets++;
-			stats->rx_bytes += ARINC429_MTU;
-		}
-		consume_skb(skb);
-		return NETDEV_TX_OK;
-	}
+	stats->tx_packets += skb->len / ARINC429_FRAME_SIZE;
+	stats->tx_bytes += skb->len;
 
 	/* Perform standard echo handling for ARINC429 network interfaces */
-	if (loop) {
-		skb = arinc429_create_echo_skb(skb);
-		if (!skb)
-			return NETDEV_TX_OK;
+	skb = arinc429_create_echo_skb(skb);
+	if (!skb)
+		return NETDEV_TX_OK;
 
-		/* Receive with packet counting */
-		varinc429_rx(skb, dev);
-	} else {
-		/* No looped packets => no counting */
-		consume_skb(skb);
-	}
+	/* Receive with packet counting */
+	varinc429_rx(skb, dev);
+
 	return NETDEV_TX_OK;
 }
 

@@ -4,7 +4,8 @@
  * Definitions for ARINC429 network layer
  * (socket addr / ARINC429 frame / ARINC429 filter)
  *
- * * Copyright (C) 2015 Marek Vasut <marex@denx.de>
+ * Copyright (C) 2015 Marek Vasut <marex@denx.de>
+ * Updates Copyright (C) 2019 CCX Technologies Inc. <charles@ccxtechnologies.com>
  *
  * Based on the SocketCAN stack.
  *
@@ -25,9 +26,9 @@
 #include <linux/socket.h>
 
 /************************************************************************
- * This is an ugly hack so that we can build this out of tree without
+ * CCX: This is an ugly hack so that we can build this out of tree without
  * patching the kernel, delete it and put these definions in the propper
- * place if this is ever pulled into a kernel. */
+ * place if this is ever pulled into your kernel. */
 
 /* should be in include/linux/socket.h, and should have it's own
  * index, not stealing from Ash (which is unused) */
@@ -66,16 +67,21 @@
  */
 
 /**
- * struct arinc429_frame - basic ARINC429 frame structure
+ * struct arinc429_word - basic ARINC429 word structure
  * @label:	ARINC429 label
  * @data:	ARINC429 P, SSM, DATA and SDI
  */
-struct arinc429_frame {
-	__u8	label;		/* 8 bit label */
-	__u8	data[3];	/* Up-to 23 bits are valid. */
+union arinc429_word {
+	__u32 raw;
+	struct {
+		__u32 label:8;
+		__u32 sdi:2;
+		__u32 data:23;
+		__u32 parity:1;
+	} fmt;
 };
 
-#define ARINC429_MTU		(sizeof(struct arinc429_frame))
+#define ARINC429_WORD_SIZE	(sizeof(union arinc429_word))
 
 /* particular protocols of the protocol family PF_ARINC429 */
 #define ARINC429_RAW		1 /* RAW sockets */

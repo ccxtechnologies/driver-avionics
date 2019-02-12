@@ -33,120 +33,6 @@ MODULE_DESCRIPTION(MOD_DESC);
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
 
-/*
- * Local echo of ARINC429 messages
- *
- * ARINC429 network devices *should* support a local echo functionality
- * (see Documentation/networking/can.txt). To test the handling of ARINC429
- * interfaces that do not support the local echo both driver types are
- * implemented. In the case that the driver does not support the echo
- * the IFF_ECHO remains clear in dev->flags. This causes the PF_ARINC429 core
- * to perform the echo as a fallback solution.
- */
-static void arinc429_flush_echo_skb(struct net_device *dev)
-{
-	struct arinc429_priv *priv = netdev_priv(dev);
-	struct net_device_stats *stats = &dev->stats;
-	int i;
-
-	for (i = 0; i < priv->echo_skb_max; i++) {
-		if (priv->echo_skb[i]) {
-			kfree_skb(priv->echo_skb[i]);
-			priv->echo_skb[i] = NULL;
-			stats->tx_dropped++;
-			stats->tx_aborted_errors++;
-		}
-	}
-}
-
-/*
- * Put the skb on the stack to be looped backed locally lateron
- *
- * The function is typically called in the start_xmit function
- * of the device driver. The driver must protect access to
- * priv->echo_skb, if necessary.
- */
-void arinc429_put_echo_skb(struct sk_buff *skb, struct net_device *dev,
-			   unsigned int idx)
-{
-	struct arinc429_priv *priv = netdev_priv(dev);
-
-	BUG_ON(idx >= priv->echo_skb_max);
-
-	/* check flag whether this packet has to be looped back */
-	if (!(dev->flags & IFF_ECHO) || skb->pkt_type != PACKET_LOOPBACK ||
-	    skb->protocol != htons(ETH_P_ARINC429)) {
-		kfree_skb(skb);
-		return;
-	}
-
-	if (!priv->echo_skb[idx]) {
-		skb = arinc429_create_echo_skb(skb);
-		if (!skb)
-			return;
-
-		/* make settings for echo to reduce code in irq context */
-		skb->pkt_type = PACKET_BROADCAST;
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
-		skb->dev = dev;
-
-		/* save this skb for tx interrupt echo handling */
-		priv->echo_skb[idx] = skb;
-	} else {
-		/* locking problem with netif_stop_queue() ?? */
-		netdev_err(dev, "%s: BUG! echo_skb is occupied!\n", __func__);
-		kfree_skb(skb);
-	}
-}
-EXPORT_SYMBOL_GPL(arinc429_put_echo_skb);
-
-/*
- * Get the skb from the stack and loop it back locally
- *
- * The function is typically called when the TX done interrupt
- * is handled in the device driver. The driver must protect
- * access to priv->echo_skb, if necessary.
- */
-unsigned int arinc429_get_echo_skb(struct net_device *dev, unsigned int idx)
-{
-	struct arinc429_priv *priv = netdev_priv(dev);
-
-	BUG_ON(idx >= priv->echo_skb_max);
-
-	if (priv->echo_skb[idx]) {
-		struct sk_buff *skb = priv->echo_skb[idx];
-
-		if (!(skb->tstamp.tv64))
-			__net_timestamp(skb);
-
-		netif_rx(priv->echo_skb[idx]);
-		priv->echo_skb[idx] = NULL;
-
-		return ARINC429_MTU;
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(arinc429_get_echo_skb);
-
-/*
-  * Remove the skb from the stack and free it.
-  *
-  * The function is typically called when TX failed.
-  */
-void arinc429_free_echo_skb(struct net_device *dev, unsigned int idx)
-{
-	struct arinc429_priv *priv = netdev_priv(dev);
-
-	BUG_ON(idx >= priv->echo_skb_max);
-
-	if (priv->echo_skb[idx]) {
-		dev_kfree_skb_any(priv->echo_skb[idx]);
-		priv->echo_skb[idx] = NULL;
-	}
-}
-EXPORT_SYMBOL_GPL(arinc429_free_echo_skb);
-
 static void arinc429_setup(struct net_device *dev)
 {
 	dev->type = ARPHRD_ARINC429;
@@ -193,17 +79,11 @@ EXPORT_SYMBOL_GPL(alloc_arinc429_skb);
 /*
  * Allocate and setup space for the ARINC429 network device
  */
-struct net_device *alloc_arinc429dev(int sizeof_priv, unsigned int echo_skb_max)
+struct net_device *alloc_arinc429dev(int size)
 {
 	struct net_device *dev;
 	struct arinc429_priv *priv;
 	int size;
-
-	if (echo_skb_max)
-		size = ALIGN(sizeof_priv, sizeof(struct sk_buff *)) +
-			echo_skb_max * sizeof(struct sk_buff *);
-	else
-		size = sizeof_priv;
 
 	dev = alloc_netdev(size, "arinc429-%d", NET_NAME_UNKNOWN,
 			   arinc429_setup);
@@ -211,12 +91,6 @@ struct net_device *alloc_arinc429dev(int sizeof_priv, unsigned int echo_skb_max)
 		return NULL;
 
 	priv = netdev_priv(dev);
-
-	if (echo_skb_max) {
-		priv->echo_skb_max = echo_skb_max;
-		priv->echo_skb = (void *)priv +
-			ALIGN(sizeof_priv, sizeof(struct sk_buff *));
-	}
 
 	return dev;
 }
@@ -279,7 +153,6 @@ EXPORT_SYMBOL_GPL(open_arinc429dev);
  */
 void close_arinc429dev(struct net_device *dev)
 {
-	arinc429_flush_echo_skb(dev);
 }
 EXPORT_SYMBOL_GPL(close_arinc429dev);
 

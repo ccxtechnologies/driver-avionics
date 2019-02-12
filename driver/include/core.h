@@ -5,6 +5,7 @@
  * using the PF_ARINC429 core.
  *
  * Copyright (C) 2015 Marek Vasut <marex@denx.de>
+ * Updates Copyright (C) 2019 CCX Technologies Inc. <charles@ccxtechnologies.com>
  *
  * Based on the SocketCAN stack.
  */
@@ -16,10 +17,10 @@
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 
-#define ARINC429_VERSION "20151101"
+#define ARINC429_VERSION "20190212"
 
 /* Increment this number each time you change some user-space interface */
-#define ARINC429_ABI_VERSION "1"
+#define ARINC429_ABI_VERSION "2"
 
 #define ARINC429_VERSION_STRING		\
 	"rev " ARINC429_VERSION " abi " ARINC429_ABI_VERSION

@@ -3,6 +3,7 @@
  *                 (used by different ARINC429 protocol modules)
  *
  * Copyright (C) 2015 Marek Vasut <marex@denx.de>
+ * Updates Copyright (C) 2019 CCX Technologies Inc. <charles@ccxtechnologies.com>
  *
  * Based on the SocketCAN stack.
  *
@@ -47,6 +48,7 @@
 MODULE_DESCRIPTION("ARINC429 PF_ARINC429 core");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
+MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 
 MODULE_ALIAS_NETPROTO(PF_ARINC429);
 
@@ -134,8 +136,9 @@ static int arinc429_create(struct net *net, struct socket *sock, int protocol,
 		 */
 		if (err) {
 			pr_err_ratelimited(
-				"arinc429: request_module (arinc429-proto-%d) failed.\n",
-				protocol);
+					   "arinc429: request_module"
+					   " (arinc429-proto-%d) failed.\n",
+					   protocol);
 		}
 
 		cp = arinc429_get_proto(protocol);
@@ -171,7 +174,7 @@ static int arinc429_create(struct net *net, struct socket *sock, int protocol,
 		sock_put(sk);
 	}
 
- errout:
+errout:
 	arinc429_put_proto(cp);
 	return err;
 }
@@ -181,28 +184,23 @@ static int arinc429_create(struct net *net, struct socket *sock, int protocol,
  */
 
 /**
- * arinc429_send - transmit a ARINC429 frame (optional with local loopback)
+ * arinc429_send - transmit a ARINC429 frame
  * @skb: pointer to socket buffer with ARINC429 frame in data section
- * @loop: loopback for listeners on local ARINC429 sockets
- *        (recommended default!)
- *
- * Due to the loopback this routine must not be called from hardirq context.
  *
  * Return:
  *  0 on success
  *  -ENETDOWN when the selected interface is down
  *  -ENOBUFS on full driver queue (see net_xmit_errno())
- *  -ENOMEM when local loopback failed at calling skb_clone()
  *  -EPERM when trying to send on a non-ARINC429 interface
  *  -EMSGSIZE ARINC429 frame size is bigger than ARINC429 interface MTU
  *  -EINVAL when the skb->data does not contain a valid ARINC429 frame
  */
-int arinc429_send(struct sk_buff *skb, int loop)
+int arinc429_send(struct sk_buff *skb)
 {
 	struct sk_buff *newskb = NULL;
 	int err = -EINVAL;
 
-	if (skb->len == ARINC429_MTU)
+	if ((skb->len % ARINC429_WORD_SIZE) == 0)
 		skb->protocol = htons(ETH_P_ARINC429);
 	else
 		goto inval_skb;
@@ -232,41 +230,8 @@ int arinc429_send(struct sk_buff *skb, int loop)
 	skb_reset_network_header(skb);
 	skb_reset_transport_header(skb);
 
-	if (loop) {
-		/* local loopback of sent ARINC429 frames */
-
-		/* indication for the ARINC429 driver: do loopback */
-		skb->pkt_type = PACKET_LOOPBACK;
-
-		/*
-		 * The reference to the originating sock may be required
-		 * by the receiving socket to check whether the frame is
-		 * its own.
-		 * Example: arinc429_raw sockopt ARINC429_RAW_RECV_OWN_MSGS
-		 * Therefore we have to ensure that skb->sk remains the
-		 * reference to the originating sock by restoring skb->sk
-		 * after each skb_clone() or skb_orphan() usage.
-		 */
-
-		if (!(skb->dev->flags & IFF_ECHO)) {
-			/*
-			 * If the interface is not capable to do loopback
-			 * itself, we do it here.
-			 */
-			newskb = skb_clone(skb, GFP_ATOMIC);
-			if (!newskb) {
-				kfree_skb(skb);
-				return -ENOMEM;
-			}
-
-			arinc429_skb_set_owner(newskb, skb->sk);
-			newskb->ip_summed = CHECKSUM_UNNECESSARY;
-			newskb->pkt_type = PACKET_BROADCAST;
-		}
-	} else {
-		/* indication for the ARINC429 driver: no loopback required */
-		skb->pkt_type = PACKET_HOST;
-	}
+	/* indication for the ARINC429 driver: no loopback required */
+	skb->pkt_type = PACKET_HOST;
 
 	/* send to netdevice */
 	err = dev_queue_xmit(skb);
@@ -418,8 +383,11 @@ int arinc429_rx_register(struct net_device *dev,
 		d->entries++;
 
 		arinc429_pstats.rcv_entries++;
-		if (arinc429_pstats.rcv_entries_max < arinc429_pstats.rcv_entries)
-			arinc429_pstats.rcv_entries_max = arinc429_pstats.rcv_entries;
+		if (arinc429_pstats.rcv_entries_max <
+		    arinc429_pstats.rcv_entries) {
+			arinc429_pstats.rcv_entries_max =
+				arinc429_pstats.rcv_entries;
+		}
 	} else {
 		kmem_cache_free(rcv_cache, r);
 		err = -ENODEV;
@@ -470,7 +438,8 @@ void arinc429_rx_unregister(struct net_device *dev,
 
 	d = find_dev_rcv_lists(dev);
 	if (!d) {
-		pr_err("BUG: receive list not found for dev %s, label %02X, mask %02X\n",
+		pr_err("BUG: receive list not found for"
+		       " dev %s, label %02X, mask %02X\n",
 		       DNAME(dev), label, mask);
 		goto out;
 	}
@@ -495,7 +464,8 @@ void arinc429_rx_unregister(struct net_device *dev,
 	 */
 
 	if (!r) {
-		WARN(1, "BUG: receive list entry not found for dev %s, id %02X, mask %02X\n",
+		WARN(1, "BUG: receive list entry not found for"
+		     " dev %s, id %02X, mask %02X\n",
 		     DNAME(dev), label, mask);
 		goto out;
 	}
@@ -512,7 +482,7 @@ void arinc429_rx_unregister(struct net_device *dev,
 		dev->ml_priv = NULL;
 	}
 
- out:
+out:
 	spin_unlock(&arinc429_rcvlists_lock);
 
 	/* schedule the receiver item for deletion */
@@ -602,8 +572,9 @@ static int arinc429_rcv(struct sk_buff *skb, struct net_device *dev,
 		goto drop;
 
 	ret = WARN_ONCE(dev->type != ARPHRD_ARINC429 ||
-			skb->len != ARINC429_MTU,
-			"PF_ARINC429: dropped non conform ARINC429 skbuf: dev type %d, len %d\n",
+			skb->len % ARINC429_FRAME_SIZE,
+			"PF_ARINC429: dropped non conform ARINC429"
+			" skbuf: dev type %d, len %d\n",
 			dev->type, skb->len);
 	if (ret)
 		goto drop;
@@ -720,7 +691,8 @@ static int arinc429_notifier(struct notifier_block *nb, unsigned long msg,
 				dev->ml_priv = NULL;
 			}
 		} else {
-			pr_err("arinc429: notifier: receive list not found for dev %s\n",
+			pr_err("arinc429: notifier: receive list"
+			       " not found for dev %s\n",
 			       dev->name);
 		}
 

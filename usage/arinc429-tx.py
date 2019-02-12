@@ -1,3 +1,6 @@
+#!/usr/bin/python
+# Copyright: 2018, CCX Technologies
+
 import socket
 import ctypes
 import ctypes.util
@@ -27,14 +30,9 @@ def error_code_to_str(code):
     return "{} (errno {}): {}".format(name, code, description)
 
 def get_addr(sock, channel):
-    """Get sockaddr for a channel."""
-    if channel:
-        data = struct.pack("16si", channel.encode(), 0)
-        res = fcntl.ioctl(sock, SIOCGIFINDEX, data)
-        idx, = struct.unpack("16xi", res)
-    else:
-        # All channels
-        idx = 0
+    data = struct.pack("16si", channel.encode(), 0)
+    res = fcntl.ioctl(sock, SIOCGIFINDEX, data)
+    idx, = struct.unpack("16xi", res)
     return struct.pack("HiLL", AF_ARINC429, idx, 0, 0)
 
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
@@ -48,7 +46,7 @@ addr = get_addr(sock, "varinc0")
 libc.bind(sock.fileno(), addr, len(addr))
 
 # == send data example ==
-sent = sock.send(bytes(4))
+sent = sock.send(bytes((0x01,0x02,0x03,0x04)))
 if sent < 0:
     print(f"Send failed {error_code_to_str(-sent)}")
     if sent == -1:

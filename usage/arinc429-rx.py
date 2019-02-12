@@ -1,3 +1,6 @@
+#!/usr/bin/python
+# Copyright: 2019, CCX Technologies
+
 import socket
 import ctypes
 import ctypes.util
@@ -13,39 +16,11 @@ ARINC429_RAW = 1
 
 SIOCGIFINDEX = 0x8933
 
-def error_code_to_str(code):
-    try:
-        name = errno.errorcode[code]
-    except KeyError:
-        name = "UNKNOWN"
-
-    try:
-        description = os.strerror(code)
-    except ValueError:
-        description = "no description available"
-
-    return "{} (errno {}): {}".format(name, code, description)
-
-def check_status(result, function, arguments):
-    if result < 0:
-        raise RuntimeError(error_code_to_str(ctypes.get_errno()))
-    return result
-
 def get_addr(sock, channel):
-    """Get sockaddr for a channel."""
-    if channel:
-        data = struct.pack("16si", channel.encode(), 0)
-        res = fcntl.ioctl(sock, SIOCGIFINDEX, data)
-        idx, = struct.unpack("16xi", res)
-
-    else:
-        # All channels
-        idx = 0
-
+    data = struct.pack("16si", channel.encode(), 0)
+    res = fcntl.ioctl(sock, SIOCGIFINDEX, data)
+    idx, = struct.unpack("16xi", res)
     return struct.pack("HiLL", AF_ARINC429, idx, 0, 0)
-
-
-
 
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 
