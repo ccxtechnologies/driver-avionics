@@ -32,7 +32,6 @@
  */
 struct arinc429_skb_priv {
 	int			ifindex;
-	size_t			words;
 	struct arinc429_word	af[0];
 };
 

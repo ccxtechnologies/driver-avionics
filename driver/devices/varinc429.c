@@ -2,6 +2,7 @@
  * varinc429.c - Virtual ARINC429 interface
  *
  * Copyright (C) 2015 Marek Vasut <marex@denx.de>
+ * Updates Copyright (C) 2019 CCX Technologies Inc. <charles@ccxtechnologies.com>
  *
  * Based on the SocketCAN stack.
  *
@@ -33,13 +34,14 @@
 MODULE_DESCRIPTION("Virtual ARINC429 interface");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
+MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 
 static void varinc429_rx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct net_device_stats *stats = &dev->stats;
 
 	stats->rx_packets++;
-	stats->rx_bytes += ARINC429_MTU;
+	stats->rx_bytes += skb->len;
 
 	skb->pkt_type  = PACKET_BROADCAST;
 	skb->dev       = dev;
@@ -54,15 +56,13 @@ static void varinc429_rx(struct sk_buff *skb, struct net_device *dev)
 static netdev_tx_t varinc429_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct net_device_stats *stats = &dev->stats;
-	int loop;
 
 	if (arinc429_dropped_invalid_skb(dev, skb))
 		return NETDEV_TX_OK;
 
-	stats->tx_packets += skb->len / ARINC429_FRAME_SIZE;
+	stats->tx_packets++;
 	stats->tx_bytes += skb->len;
 
-	/* Perform standard echo handling for ARINC429 network interfaces */
 	skb = arinc429_create_echo_skb(skb);
 	if (!skb)
 		return NETDEV_TX_OK;
@@ -79,7 +79,7 @@ static int varinc429_change_mtu(struct net_device *dev, int new_mtu)
 	if (dev->flags & IFF_UP)
 		return -EBUSY;
 
-	if (new_mtu != ARINC429_MTU)
+	if (new_mtu % ARINC429_WORD_SIZE)
 		return -EINVAL;
 
 	dev->mtu = new_mtu;
@@ -94,16 +94,11 @@ static const struct net_device_ops varinc429_netdev_ops = {
 static void varinc429_setup(struct net_device *dev)
 {
 	dev->type		= ARPHRD_ARINC429;
-	dev->mtu		= ARINC429_MTU;
+	dev->mtu		= 32*ARINC429_WORD_SIZE;
 	dev->hard_header_len	= 0;
 	dev->addr_len		= 0;
 	dev->tx_queue_len	= 0;
 	dev->flags		= IFF_NOARP;
-
-	/* set flags according to driver capabilities */
-	if (echo)
-		dev->flags |= IFF_ECHO;
-
 	dev->netdev_ops		= &varinc429_netdev_ops;
 	dev->destructor		= free_netdev;
 }
@@ -116,10 +111,6 @@ static struct rtnl_link_ops varinc429_link_ops __read_mostly = {
 static __init int varinc429_init_module(void)
 {
 	pr_info("varinc429: Virtual ARINC429 interface driver\n");
-
-	if (echo)
-		pr_info("varinc429: enabled echo on driver level.\n");
-
 	return rtnl_link_register(&varinc429_link_ops);
 }
 
