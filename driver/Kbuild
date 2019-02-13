@@ -1,7 +1,5 @@
 ccflags-y		+= -D__CHECK_ENDIAN__
 ccflags-y		+= -DDEBUG
 
-# ARINC-429 Network interfaces (would be in net/arinc429 in the kernel)
 obj-m			+= arinc429.o
-arinc429-y		:= af_arinc429.o
 
