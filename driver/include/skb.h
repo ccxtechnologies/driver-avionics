@@ -32,7 +32,7 @@
  */
 struct arinc429_skb_priv {
 	int			ifindex;
-	struct arinc429_word	af[0];
+	union arinc429_word	af[0];
 };
 
 #define ARINC429_PRIV_SIZE	(sizeof(struct arinc429_skb_priv))

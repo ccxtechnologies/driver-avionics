@@ -71,7 +71,7 @@ struct sk_buff *alloc_arinc429_skb(struct net_device *dev,
 	arinc429_skb_reserve(skb);
 	arinc429_skb_prv(skb)->ifindex = dev->ifindex;
 
-	*cf = (struct arinc429_word *)skb_put(skb,
+	*cf = (union arinc429_word *)skb_put(skb,
 			ARINC429_WORD_SIZE*words);
 	memset(*cf, 0, ARINC429_WORD_SIZE*words);
 
@@ -86,7 +86,6 @@ struct net_device *alloc_arinc429dev(int size)
 {
 	struct net_device *dev;
 	struct arinc429_priv *priv;
-	int size;
 
 	dev = alloc_netdev(size, "arinc429-%d", NET_NAME_UNKNOWN,
 			   arinc429_setup);
@@ -118,7 +117,7 @@ int open_arinc429dev(struct net_device *dev)
 {
 	struct arinc429_priv *priv = netdev_priv(dev);
 
-	if (!priv->rate.rx_rate || !priv->rate.tx_rate) {
+	if (!priv->rate.rate_hz) {
 		netdev_err(dev, "data rate not yet defined\n");
 		return -EINVAL;
 	}
@@ -173,11 +172,8 @@ static int arinc429_changelink(struct net_device *dev,
 		 * set to 0, do not modify that configuration.
 		 */
 		memcpy(&clk, nla_data(data[IFLA_ARINC429_RATE]), sizeof(clk));
-		if (clk.rx_rate && clk.rx_rate != 12500 &&
-		    clk.rx_rate != 100000)
-			return -EINVAL;
-		if (clk.tx_rate && clk.tx_rate != 12500 &&
-		    clk.tx_rate != 100000)
+		if (clk.rate_hx && clk.rate_hz != 12500 &&
+		    clk.rate_hz != 100000)
 			return -EINVAL;
 
 		memcpy(&priv->rate, &clk, sizeof(clk));

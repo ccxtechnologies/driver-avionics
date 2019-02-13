@@ -98,7 +98,7 @@ static void raw_rcv(struct sk_buff *oskb, void *data)
 	unsigned int *pflags;
 
 	/* do not pass non-ARINC429 frames to a socket */
-	if (oskb->len % ARINC429_FRAME_SIZE)
+	if (oskb->len % ARINC429_WORD_SIZE)
 		return;
 
 	/* eliminate multiple filter matches for the same skb */

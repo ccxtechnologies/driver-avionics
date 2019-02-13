@@ -27,7 +27,7 @@
  * ARINC429 data rate parameters
  */
 struct arinc429_rate {
-	__u32 rate_hz;		/* ARINC429 bus RX rate [Hz] */
+	__u32 rx_rate;		/* ARINC429 bus rate [Hz] */
 };
 
 /*

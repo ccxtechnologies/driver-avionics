@@ -62,10 +62,6 @@ static struct kmem_cache *rcv_cache __read_mostly;
 static const struct arinc429_proto *proto_tab[ARINC429_NPROTO] __read_mostly;
 static DEFINE_MUTEX(proto_tab_lock);
 
-struct timer_list arinc429_stattimer;   /* timer for statistics update */
-struct s_stats    arinc429_stats;       /* packet statistics */
-struct s_pstats   arinc429_pstats;      /* receive list statistics */
-
 /*
  * af_arinc429 socket functions
  */
@@ -250,10 +246,6 @@ int arinc429_send(struct sk_buff *skb)
 		netif_rx_ni(newskb);
 	}
 
-	/* update statistics */
-	arinc429_stats.tx_frames++;
-	arinc429_stats.tx_frames_delta++;
-
 	return 0;
 
 inval_skb:
@@ -382,12 +374,6 @@ int arinc429_rx_register(struct net_device *dev,
 		hlist_add_head_rcu(&r->list, rl);
 		d->entries++;
 
-		arinc429_pstats.rcv_entries++;
-		if (arinc429_pstats.rcv_entries_max <
-		    arinc429_pstats.rcv_entries) {
-			arinc429_pstats.rcv_entries_max =
-				arinc429_pstats.rcv_entries;
-		}
 	} else {
 		kmem_cache_free(rcv_cache, r);
 		err = -ENODEV;
@@ -473,9 +459,6 @@ void arinc429_rx_unregister(struct net_device *dev,
 	hlist_del_rcu(&r->list);
 	d->entries--;
 
-	if (arinc429_pstats.rcv_entries > 0)
-		arinc429_pstats.rcv_entries--;
-
 	/* remove device structure requested by NETDEV_UNREGISTER */
 	if (d->remove_on_zero_entries && !d->entries) {
 		kfree(d);
@@ -502,7 +485,7 @@ static unsigned int arinc429_rcv_filter(struct dev_rcv_lists *d,
 {
 	struct receiver *r;
 	unsigned int matches = 0;
-	struct arinc429_frame *af = (struct arinc429_frame *)skb->data;
+	union arinc429_word *af = (struct arinc429_frame *)skb->data;
 	__u8 label = af->label;
 
 	if (d->entries == 0)
@@ -538,10 +521,6 @@ static void arinc429_receive(struct sk_buff *skb, struct net_device *dev)
 	struct dev_rcv_lists *d;
 	unsigned int matches;
 
-	/* update statistics */
-	arinc429_stats.rx_frames++;
-	arinc429_stats.rx_frames_delta++;
-
 	rcu_read_lock();
 
 	/* deliver the packet to sockets listening on all devices */
@@ -557,10 +536,6 @@ static void arinc429_receive(struct sk_buff *skb, struct net_device *dev)
 	/* consume the skbuff allocated by the netdevice driver */
 	consume_skb(skb);
 
-	if (matches > 0) {
-		arinc429_stats.matches++;
-		arinc429_stats.matches_delta++;
-	}
 }
 
 static int arinc429_rcv(struct sk_buff *skb, struct net_device *dev,
@@ -739,8 +714,6 @@ static __init int arinc429_init(void)
 	setup_timer(&arinc429_stattimer, arinc429_stat_update, 0);
 	mod_timer(&arinc429_stattimer, round_jiffies(jiffies + HZ));
 
-	arinc429_init_proc();
-
 	/* protocol register */
 	sock_register(&arinc429_family_ops);
 	register_netdevice_notifier(&arinc429_netdev_notifier);
@@ -754,8 +727,6 @@ static __exit void arinc429_exit(void)
 	struct net_device *dev;
 
 	del_timer_sync(&arinc429_stattimer);
-
-	arinc429_remove_proc();
 
 	/* protocol unregister */
 	dev_remove_pack(&arinc429_packet);

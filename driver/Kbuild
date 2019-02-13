@@ -11,7 +11,7 @@ arinc429-dev-y	:= devices/dev.o
 
 # ARINC-429 Network interfaces (would be in net/arinc429 in the kernel)
 obj-m			+= arinc429.o
-arinc429-y		:= net/af_arinc429.o net/proc.o
+arinc429-y		:= net/af_arinc429.o
 
 obj-m			+= arinc429-raw.o
 arinc429-raw-y	:= net/raw.o

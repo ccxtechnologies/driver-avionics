@@ -46,7 +46,7 @@ static void varinc429_rx(struct sk_buff *tx_skb, struct net_device *dev)
 	rx_skb = alloc_arinc429_skb(dev, &cf, tx_skb->len/ARINC429_WORD_SIZE);
 
 	if (!rx_skb)
-		return NULL;
+		return;
 
 	if (skb_copy_bits(tx_skb, 0, (void*)cf, tx_skb->len))
 		BUG();

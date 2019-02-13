@@ -76,7 +76,7 @@ union arinc429_word {
 	struct {
 		__u32 label:8;
 		__u32 sdi:2;
-		__u32 data:23;
+		__u32 data:21;
 		__u32 parity:1;
 	} fmt;
 };
