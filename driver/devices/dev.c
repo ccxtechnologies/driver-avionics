@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2015 Marek Vasut <marex@denx.de>
+ * Updates Copyright (C) 2019 CCX Technologies Inc. <charles@ccxtechnologies.com>
  *
  * Based on the SocketCAN stack.
  *
@@ -32,14 +33,15 @@
 MODULE_DESCRIPTION(MOD_DESC);
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
+MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 
 static void arinc429_setup(struct net_device *dev)
 {
 	dev->type = ARPHRD_ARINC429;
-	dev->mtu = ARINC429_MTU;
+	dev->mtu = ARINC429_WORD_SIZE;
 	dev->hard_header_len = 0;
 	dev->addr_len = 0;
-	dev->tx_queue_len = 10;
+	dev->tx_queue_len = 32;
 
 	/* New-style flags. */
 	dev->flags = IFF_NOARP;
@@ -47,12 +49,13 @@ static void arinc429_setup(struct net_device *dev)
 }
 
 struct sk_buff *alloc_arinc429_skb(struct net_device *dev,
-				   struct arinc429_frame **cf)
+				   union arinc429_word **cf, int words)
 {
 	struct sk_buff *skb;
 
-	skb = netdev_alloc_skb(dev, sizeof(struct arinc429_skb_priv) +
-			       sizeof(struct arinc429_frame));
+	skb = netdev_alloc_skb(dev,
+			ARINC429_PRIV_SIZE + (ARINC429_WORD_SIZE*words));
+
 	if (unlikely(!skb))
 		return NULL;
 
@@ -68,9 +71,9 @@ struct sk_buff *alloc_arinc429_skb(struct net_device *dev,
 	arinc429_skb_reserve(skb);
 	arinc429_skb_prv(skb)->ifindex = dev->ifindex;
 
-	*cf = (struct arinc429_frame *)skb_put(skb,
-					       sizeof(struct arinc429_frame));
-	memset(*cf, 0, sizeof(struct arinc429_frame));
+	*cf = (struct arinc429_word *)skb_put(skb,
+			ARINC429_WORD_SIZE*words);
+	memset(*cf, 0, ARINC429_WORD_SIZE*words);
 
 	return skb;
 }
@@ -104,23 +107,6 @@ void free_arinc429dev(struct net_device *dev)
 	free_netdev(dev);
 }
 EXPORT_SYMBOL_GPL(free_arinc429dev);
-
-/*
- * changing MTU and control mode for ARINC429 devices
- */
-int arinc429_change_mtu(struct net_device *dev, int new_mtu)
-{
-	/* Do not allow changing the MTU while running */
-	if (dev->flags & IFF_UP)
-		return -EBUSY;
-
-	if (new_mtu != ARINC429_MTU)
-		return -EINVAL;
-
-	dev->mtu = new_mtu;
-	return 0;
-}
-EXPORT_SYMBOL_GPL(arinc429_change_mtu);
 
 /*
  * Common open function when the device gets opened.

@@ -34,9 +34,6 @@ struct arinc429_priv {
 
 	int (*do_set_rate)(struct net_device *dev);
 	int (*do_set_mode)(struct net_device *dev, enum arinc429_mode mode);
-
-	unsigned int echo_skb_max;
-	struct sk_buff **echo_skb;
 };
 
 /* Drop a given socketbuffer if it does not contain a valid ARINC429 frame. */
@@ -57,8 +54,7 @@ inval_skb:
 	return 1;
 }
 
-struct net_device *alloc_arinc429dev(int sizeof_priv,
-				     unsigned int echo_skb_max);
+struct net_device *alloc_arinc429dev(int sizeof_priv);
 void free_arinc429dev(struct net_device *dev);
 
 /* a arinc429dev safe wrapper around netdev_priv */
@@ -71,12 +67,7 @@ int arinc429_change_mtu(struct net_device *dev, int new_mtu);
 int register_arinc429dev(struct net_device *dev);
 void unregister_arinc429dev(struct net_device *dev);
 
-void arinc429_put_echo_skb(struct sk_buff *skb, struct net_device *dev,
-		      unsigned int idx);
-unsigned int arinc429_get_echo_skb(struct net_device *dev, unsigned int idx);
-void arinc429_free_echo_skb(struct net_device *dev, unsigned int idx);
-
 struct sk_buff *alloc_arinc429_skb(struct net_device *dev,
-				   struct arinc429_frame **cf);
+				   union arinc429_word **cf, int length);
 
 #endif /* __ARINC429_DEV_H__ */

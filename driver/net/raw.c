@@ -593,7 +593,6 @@ static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 
 	arinc429_skb_reserve(skb);
 	arinc429_skb_prv(skb)->ifindex = dev->ifindex;
-	arinc429_skb_prv(skb)->words = size / ARINC429_WORD_SIZE;
 
 	err = memcpy_from_msg(skb_put(skb, size), msg, size);
 	if (err < 0)

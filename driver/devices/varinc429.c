@@ -36,21 +36,25 @@ MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 
-static void varinc429_rx(struct sk_buff *skb, struct net_device *dev)
+static void varinc429_rx(struct sk_buff *tx_skb, struct net_device *dev)
 {
 	struct net_device_stats *stats = &dev->stats;
+	struct sk_buff *rx_skb;
+	union arinc429_word *cf;
+
+
+	rx_skb = alloc_arinc429_skb(dev, &cf, tx_skb->len/ARINC429_WORD_SIZE);
+
+	if (!rx_skb)
+		return NULL;
+
+	if (skb_copy_bits(tx_skb, 0, (void*)cf, tx_skb->len))
+		BUG();
 
 	stats->rx_packets++;
-	stats->rx_bytes += skb->len;
+	stats->rx_bytes += rx_skb->len;
 
-	skb->pkt_type  = PACKET_BROADCAST;
-	skb->dev       = dev;
-	skb->ip_summed = CHECKSUM_UNNECESSARY;
-
-	if (!(skb->tstamp.tv64))
-		__net_timestamp(skb);
-
-	netif_rx_ni(skb);
+	netif_rx_ni(rx_skb);
 }
 
 static netdev_tx_t varinc429_tx(struct sk_buff *skb, struct net_device *dev)
@@ -63,12 +67,9 @@ static netdev_tx_t varinc429_tx(struct sk_buff *skb, struct net_device *dev)
 	stats->tx_packets++;
 	stats->tx_bytes += skb->len;
 
-	skb = arinc429_create_echo_skb(skb);
-	if (!skb)
-		return NETDEV_TX_OK;
-
-	/* Receive with packet counting */
 	varinc429_rx(skb, dev);
+
+	consume_skb(skb);
 
 	return NETDEV_TX_OK;
 }
