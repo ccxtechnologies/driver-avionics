@@ -27,23 +27,17 @@
 #include "arinc429.h"
 
 /* af_arinc429 rx dispatcher structures */
-
 struct receiver {
 	struct hlist_node	list;
 	struct rcu_head		rcu;
-	__u8			label;
-	__u8			mask;
-	unsigned long		matches;
 	void			(*func)(struct sk_buff *, void *);
 	void			*data;
 	char			*ident;
 };
 
-enum { RX_ALL, RX_FIL, RX_INV, RX_MAX };
-
 /* per device receive filters linked at dev->ml_priv */
 struct dev_rcv_lists {
-	struct hlist_head	rx[RX_MAX];
+	struct hlist_head	rx;
 	int			remove_on_zero_entries;
 	int			entries;
 };

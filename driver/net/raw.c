@@ -40,17 +40,8 @@
 MODULE_DESCRIPTION("PF_ARINC429 raw protocol");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
+MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_ALIAS("arinc429-proto-1");
-
-/*
- * A raw socket has a list of arinc429_filters attached to it, each receiving
- * the ARINC429 frames matching that filter.  If the filter list is empty,
- * no ARINC429 frames will be received by the socket.  The default after
- * opening the socket, is to have one filter which receives all frames.
- * The filter list is allocated dynamically with the exception of the
- * list containing only one item.  This common case is optimized by
- * storing the single filter in dfilter, to avoid using dynamic memory.
- */
 
 struct uniqframe {
 	ktime_t tstamp;
@@ -63,10 +54,6 @@ struct raw_sock {
 	int bound;
 	int ifindex;
 	struct notifier_block notifier;
-	int join_filters;
-	int count;                 /* number of active filters */
-	struct arinc429_filter dfilter; /* default/single filter */
-	struct arinc429_filter *filter; /* pointer to filter(s) */
 	struct uniqframe __percpu *uniq;
 };
 
@@ -414,147 +401,6 @@ static int raw_getname(struct socket *sock, struct sockaddr *uaddr,
 	return 0;
 }
 
-static int raw_setsockopt(struct socket *sock, int level, int optname,
-			  char __user *optval, unsigned int optlen)
-{
-	struct sock *sk = sock->sk;
-	struct raw_sock *ro = raw_sk(sk);
-	struct arinc429_filter *filter = NULL;  /* dyn. alloc'ed filters */
-	struct arinc429_filter sfilter;         /* single filter */
-	struct net_device *dev = NULL;
-	int count = 0;
-	int err = 0;
-
-	if (level != SOL_ARINC429_RAW)
-		return -EINVAL;
-
-	switch (optname) {
-	case ARINC429_RAW_FILTER:
-		if (optlen % sizeof(struct arinc429_filter) != 0)
-			return -EINVAL;
-
-		count = optlen / sizeof(struct arinc429_filter);
-
-		if (count > 1) {
-			/* filter does not fit into dfilter => alloc space */
-			filter = memdup_user(optval, optlen);
-			if (IS_ERR(filter))
-				return PTR_ERR(filter);
-		} else if (count == 1) {
-			if (copy_from_user(&sfilter, optval, sizeof(sfilter)))
-				return -EFAULT;
-		}
-
-		lock_sock(sk);
-
-		if (ro->bound && ro->ifindex)
-			dev = dev_get_by_index(&init_net, ro->ifindex);
-
-		if (ro->bound) {
-			/* (try to) register the new filters */
-			if (count == 1)
-				err = raw_enable_filters(dev, sk, &sfilter, 1);
-			else
-				err = raw_enable_filters(dev, sk, filter,
-							 count);
-			if (err) {
-				if (count > 1)
-					kfree(filter);
-				goto out_fil;
-			}
-
-			/* remove old filter registrations */
-			raw_disable_filters(dev, sk, ro->filter, ro->count);
-		}
-
-		/* remove old filter space */
-		if (ro->count > 1)
-			kfree(ro->filter);
-
-		/* link new filters to the socket */
-		if (count == 1) {
-			/* copy filter data for single filter */
-			ro->dfilter = sfilter;
-			filter = &ro->dfilter;
-		}
-		ro->filter = filter;
-		ro->count  = count;
-
- out_fil:
-		if (dev)
-			dev_put(dev);
-
-		release_sock(sk);
-
-		break;
-
-	case ARINC429_RAW_JOIN_FILTERS:
-		if (optlen != sizeof(ro->join_filters))
-			return -EINVAL;
-
-		if (copy_from_user(&ro->join_filters, optval, optlen))
-			return -EFAULT;
-
-		break;
-
-	default:
-		return -ENOPROTOOPT;
-	}
-	return err;
-}
-
-static int raw_getsockopt(struct socket *sock, int level, int optname,
-			  char __user *optval, int __user *optlen)
-{
-	struct sock *sk = sock->sk;
-	struct raw_sock *ro = raw_sk(sk);
-	int len;
-	void *val;
-	int err = 0;
-
-	if (level != SOL_ARINC429_RAW)
-		return -EINVAL;
-	if (get_user(len, optlen))
-		return -EFAULT;
-	if (len < 0)
-		return -EINVAL;
-
-	switch (optname) {
-	case ARINC429_RAW_FILTER:
-		lock_sock(sk);
-		if (ro->count > 0) {
-			int fsize = ro->count * sizeof(struct arinc429_filter);
-
-			if (len > fsize)
-				len = fsize;
-			if (copy_to_user(optval, ro->filter, len))
-				err = -EFAULT;
-		} else {
-			len = 0;
-		}
-		release_sock(sk);
-
-		if (!err)
-			err = put_user(len, optlen);
-		return err;
-
-	case ARINC429_RAW_JOIN_FILTERS:
-		if (len > sizeof(int))
-			len = sizeof(int);
-		val = &ro->join_filters;
-		break;
-
-	default:
-		return -ENOPROTOOPT;
-	}
-
-	if (put_user(len, optlen))
-		return -EFAULT;
-	if (copy_to_user(optval, val, len))
-		return -EFAULT;
-	return 0;
-}
-
 static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 {
 	struct sock *sk = sock->sk;
@@ -586,7 +432,7 @@ static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 	if (!dev)
 		return -ENXIO;
 
-	skb = sock_alloc_send_skb(sk, size + sizeof(struct arinc429_skb_priv),
+	skb = sock_alloc_send_skb(sk, size + ARINC429_PRIV_SIZE,
 				  msg->msg_flags & MSG_DONTWAIT, &err);
 	if (!skb)
 		goto put_dev;
@@ -604,7 +450,7 @@ static int raw_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 	skb->sk  = sk;
 	skb->priority = sk->sk_priority;
 
-	err = arinc429_send(skb);
+	err = arinc429_egress(skb);
 
 	dev_put(dev);
 
@@ -676,8 +522,8 @@ static const struct proto_ops raw_ops = {
 	.ioctl         = arinc429_ioctl,
 	.listen        = sock_no_listen,
 	.shutdown      = sock_no_shutdown,
-	.setsockopt    = raw_setsockopt,
-	.getsockopt    = raw_getsockopt,
+	.setsockopt    = sock_no_setsockopt,
+	.getsockopt    = sock_no_getsockopt,
 	.sendmsg       = raw_sendmsg,
 	.recvmsg       = raw_recvmsg,
 	.mmap          = sock_no_mmap,
@@ -713,7 +559,7 @@ static __init int raw_module_init(void)
 
 static __exit void raw_module_exit(void)
 {
-	arinc429_proto_unregister(&raw_arinc429_proto);
+	arinc429_proto_unregister(&raw_arinc430_proto);
 }
 
 module_init(raw_module_init);

@@ -52,7 +52,7 @@ MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 
 MODULE_ALIAS_NETPROTO(PF_ARINC429);
 
-/* receive filters subscribed for 'all' ARINC429 devices */
+/* receive subscribed for 'all' ARINC429 protocols */
 struct dev_rcv_lists arinc429_rx_alldev_list;
 static DEFINE_SPINLOCK(arinc429_rcvlists_lock);
 
@@ -96,11 +96,6 @@ static const struct arinc429_proto *arinc429_get_proto(int protocol)
 	rcu_read_unlock();
 
 	return cp;
-}
-
-static inline void arinc429_put_proto(const struct arinc429_proto *cp)
-{
-	module_put(cp->prot->owner);
 }
 
 static int arinc429_create(struct net *net, struct socket *sock, int protocol,
@@ -171,7 +166,7 @@ static int arinc429_create(struct net *net, struct socket *sock, int protocol,
 	}
 
 errout:
-	arinc429_put_proto(cp);
+	module_put(cp->prot->owner);
 	return err;
 }
 
@@ -180,7 +175,7 @@ errout:
  */
 
 /**
- * arinc429_send - transmit a ARINC429 frame
+ * arinc429_egress - transmit a ARINC429 frame
  * @skb: pointer to socket buffer with ARINC429 frame in data section
  *
  * Return:
@@ -191,7 +186,7 @@ errout:
  *  -EMSGSIZE ARINC429 frame size is bigger than ARINC429 interface MTU
  *  -EINVAL when the skb->data does not contain a valid ARINC429 frame
  */
-int arinc429_send(struct sk_buff *skb)
+int arinc429_egress(struct sk_buff *skb)
 {
 	struct sk_buff *newskb = NULL;
 	int err = -EINVAL;
@@ -252,7 +247,7 @@ inval_skb:
 	kfree_skb(skb);
 	return err;
 }
-EXPORT_SYMBOL(arinc429_send);
+EXPORT_SYMBOL(arinc429_egress);
 
 /*
  * af_arinc429 rx path
@@ -267,69 +262,11 @@ static struct dev_rcv_lists *find_dev_rcv_lists(struct net_device *dev)
 }
 
 /**
- * find_rcv_list - determine optimal filterlist inside device filter struct
- * @label: pointer to ARINC429 identifier of a given arinc429_filter
- * @mask: pointer to ARINC429 mask of a given arinc429_filter
- * @inv: filter is inverted
- * @d: pointer to the device filter struct
- *
- * Description:
- *  Returns the optimal filterlist to reduce the filter handling in the
- *  receive path. This function is called by service functions that need
- *  to register or unregister a arinc429_filter in the filter lists.
- *
- *  A filter matches in general, when
- *
- *          <received_label> & mask == label & mask
- *
- *  The filter can be inverted (ARINC429_INV_FILTER bit set in label).
- *
- * Return:
- *  Pointer to optimal filterlist for the given label/mask pair.
- *  Constistency checked mask.
- *  Reduced label to have a preprocessed filter compare value.
- */
-static struct hlist_head *find_rcv_list(u8 *label, u8 *mask, const bool inv,
-					struct dev_rcv_lists *d)
-{
-	/* reduce condition testing at receive time */
-	*label &= *mask;
-
-	/* inverse label/can_mask filter */
-	if (inv)
-		return &d->rx[RX_INV];
-
-	/* mask == 0 => no condition testing at receive time */
-	if (!(*mask))
-		return &d->rx[RX_ALL];
-
-	/* default: filter via label/can_mask */
-	return &d->rx[RX_FIL];
-}
-
-/**
  * arinc429_rx_register - subscribe ARINC429 frames from a specific interface
  * @dev: pointer to netdevice (NULL => subscribe from 'all' devices list)
- * @filter: ARINC429 filter (see description)
- * @func: callback function on filter match
+ * @func: callback function on ingress
  * @data: returned parameter for callback function
  * @ident: string for calling module identification
- *
- * Description:
- *  Invokes the callback function with the received sk_buff and the given
- *  parameter 'data' on a matching receive filter. A filter matches, when
- *
- *          <received_arinc429_id> & mask == arinc429_id & mask
- *
- *  The filter can be inverted (ARINC429_INV_FILTER bit set in arinc429_id)
- *  or it can filter for error message frames (ARINC429_ERR_FLAG bit set in
- *  mask).
- *
- *  The provided pointer to the sk_buff is guaranteed to be valid as long as
- *  the callback function is running. The callback function must *not* free
- *  the given sk_buff while processing it's task. When the given sk_buff is
- *  needed after the end of the callback function it must be cloned inside
- *  the callback function with skb_clone().
  *
  * Return:
  *  0 on success
@@ -337,7 +274,6 @@ static struct hlist_head *find_rcv_list(u8 *label, u8 *mask, const bool inv,
  *  -ENODEV unknown device
  */
 int arinc429_rx_register(struct net_device *dev,
-			 struct arinc429_filter *filter,
 			 void (*func)(struct sk_buff *, void *), void *data,
 			 char *ident)
 {
@@ -362,11 +298,9 @@ int arinc429_rx_register(struct net_device *dev,
 
 	d = find_dev_rcv_lists(dev);
 	if (d) {
-		rl = find_rcv_list(&label, &mask, inv, d);
+		rl = d->rx;
 
 		r->label   = label;
-		r->mask    = mask;
-		r->matches = 0;
 		r->func    = func;
 		r->data    = data;
 		r->ident   = ident;
@@ -391,31 +325,25 @@ EXPORT_SYMBOL(arinc429_rx_register);
 static void arinc429_rx_delete_receiver(struct rcu_head *rp)
 {
 	struct receiver *r = container_of(rp, struct receiver, rcu);
-
 	kmem_cache_free(rcv_cache, r);
 }
 
 /**
  * arinc429_rx_unregister - unsubscribe ARINC429 frames from specific interface
  * @dev: pointer to netdevice (NULL => unsubscribe from 'all' devices list)
- * @filter: ARINC429 filter
- * @func: callback function on filter match
+ * @func: callback function on ingress
  * @data: returned parameter for callback function
  *
  * Description:
  *  Removes subscription entry depending on given (subscription) values.
  */
 void arinc429_rx_unregister(struct net_device *dev,
-			    struct arinc429_filter *filter,
 			    void (*func)(struct sk_buff *, void *),
 			    void *data)
 {
 	struct receiver *r = NULL;
 	struct hlist_head *rl;
 	struct dev_rcv_lists *d;
-	u8 label = filter->label;
-	u8 mask = filter->mask;
-	const bool inv = filter->flags & ARINC429_INV_FILTER;
 
 	if (dev && dev->type != ARPHRD_ARINC429)
 		return;
@@ -430,17 +358,15 @@ void arinc429_rx_unregister(struct net_device *dev,
 		goto out;
 	}
 
-	rl = find_rcv_list(&label, &mask, inv, d);
+	rl = d->rx;
 
 	/*
 	 * Search the receiver list for the item to delete.  This should
 	 * exist, since no receiver may be unregistered that hasn't
 	 * been registered before.
 	 */
-
 	hlist_for_each_entry_rcu(r, rl, list) {
-		if (r->label == label && r->mask == mask &&
-		    r->func == func && r->data == data)
+		if (r->func == func && r->data == data)
 			break;
 	}
 
@@ -448,7 +374,6 @@ void arinc429_rx_unregister(struct net_device *dev,
 	 * Check for bugs in ARINC429 protocol implementations using af_arinc429.c:
 	 * 'r' will be NULL if no matching list item was found for removal.
 	 */
-
 	if (!r) {
 		WARN(1, "BUG: receive list entry not found for"
 		     " dev %s, id %02X, mask %02X\n",
@@ -474,74 +399,24 @@ out:
 }
 EXPORT_SYMBOL(arinc429_rx_unregister);
 
-static inline void deliver(struct sk_buff *skb, struct receiver *r)
-{
-	r->func(skb, r->data);
-	r->matches++;
-}
-
-static unsigned int arinc429_rcv_filter(struct dev_rcv_lists *d,
-					struct sk_buff *skb)
+static void arinc429_ingress_send(struct dev_rcv_lists *d, struct sk_buff *skb)
 {
 	struct receiver *r;
-	unsigned int matches = 0;
-	union arinc429_word *af = (struct arinc429_frame *)skb->data;
-	__u8 label = af->label;
 
 	if (d->entries == 0)
 		return 0;
 
 	/* check for unfiltered entries */
-	hlist_for_each_entry_rcu(r, &d->rx[RX_ALL], list) {
-		deliver(skb, r);
-		matches++;
+	hlist_for_each_entry_rcu(r, &d->rx, list) {
+		r->func(skb, r->data);
 	}
-
-	/* check for label/mask entries */
-	hlist_for_each_entry_rcu(r, &d->rx[RX_FIL], list) {
-		if ((label & r->mask) == r->label) {
-			deliver(skb, r);
-			matches++;
-		}
-	}
-
-	/* check for inverted label/mask entries */
-	hlist_for_each_entry_rcu(r, &d->rx[RX_INV], list) {
-		if ((label & r->mask) != r->label) {
-			deliver(skb, r);
-			matches++;
-		}
-	}
-
-	return matches;
 }
 
-static void arinc429_receive(struct sk_buff *skb, struct net_device *dev)
-{
-	struct dev_rcv_lists *d;
-	unsigned int matches;
-
-	rcu_read_lock();
-
-	/* deliver the packet to sockets listening on all devices */
-	matches = arinc429_rcv_filter(&arinc429_rx_alldev_list, skb);
-
-	/* find receive list for this device */
-	d = find_dev_rcv_lists(dev);
-	if (d)
-		matches += arinc429_rcv_filter(d, skb);
-
-	rcu_read_unlock();
-
-	/* consume the skbuff allocated by the netdevice driver */
-	consume_skb(skb);
-
-}
-
-static int arinc429_rcv(struct sk_buff *skb, struct net_device *dev,
+static int arinc429_ingress(struct sk_buff *skb, struct net_device *dev,
 			struct packet_type *pt, struct net_device *orig_dev)
 {
 	int ret;
+	struct dev_rcv_lists *d;
 
 	if (unlikely(!net_eq(dev_net(dev), &init_net)))
 		goto drop;
@@ -554,7 +429,21 @@ static int arinc429_rcv(struct sk_buff *skb, struct net_device *dev,
 	if (ret)
 		goto drop;
 
-	arinc429_receive(skb, dev);
+	rcu_read_lock();
+
+	/* deliver the packet to sockets listening on all devices */
+	arinc429_ingress_send(&arinc429_rx_alldev_list, skb);
+
+	/* find receive list for this device */
+	d = find_dev_rcv_lists(dev);
+	if (d)
+		arinc429_ingress_send(d, skb);
+
+	rcu_read_unlock();
+
+	/* consume the skbuff allocated by the netdevice driver */
+	consume_skb(skb);
+
 	return NET_RX_SUCCESS;
 
 drop:
@@ -644,7 +533,6 @@ static int arinc429_notifier(struct notifier_block *nb, unsigned long msg,
 
 	switch (msg) {
 	case NETDEV_REGISTER:
-
 		/* create new dev_rcv_lists for this device */
 		d = kzalloc(sizeof(*d), GFP_KERNEL);
 		if (!d)
@@ -684,7 +572,7 @@ static int arinc429_notifier(struct notifier_block *nb, unsigned long msg,
  */
 static struct packet_type arinc429_packet __read_mostly = {
 	.type	= cpu_to_be16(ETH_P_ARINC429),
-	.func	= arinc429_rcv,
+	.func	= arinc429_ingress,
 };
 
 static const struct net_proto_family arinc429_family_ops = {
@@ -710,10 +598,6 @@ static __init int arinc429_init(void)
 	if (!rcv_cache)
 		return -ENOMEM;
 
-	/* the statistics are updated every second (timer triggered) */
-	setup_timer(&arinc429_stattimer, arinc429_stat_update, 0);
-	mod_timer(&arinc429_stattimer, round_jiffies(jiffies + HZ));
-
 	/* protocol register */
 	sock_register(&arinc429_family_ops);
 	register_netdevice_notifier(&arinc429_netdev_notifier);
@@ -725,8 +609,6 @@ static __init int arinc429_init(void)
 static __exit void arinc429_exit(void)
 {
 	struct net_device *dev;
-
-	del_timer_sync(&arinc429_stattimer);
 
 	/* protocol unregister */
 	dev_remove_pack(&arinc429_packet);
