@@ -4,8 +4,7 @@
  * Definitions for ARINC429 network layer
  * (socket addr / ARINC429 frame / ARINC429 filter)
  *
- * Copyright (C) 2015 Marek Vasut <marex@denx.de>
- * Updates Copyright (C) 2019 CCX Technologies Inc. <charles@ccxtechnologies.com>
+ * * Copyright (C) 2015 Marek Vasut <marex@denx.de>
  *
  * Based on the SocketCAN stack.
  *
@@ -25,35 +24,6 @@
 #include <linux/types.h>
 #include <linux/socket.h>
 
-/************************************************************************
- * CCX: This is an ugly hack so that we can build this out of tree without
- * patching the kernel, delete it and put these definions in the propper
- * place if this is ever pulled into your kernel. */
-
-/* should be in include/linux/socket.h, and should have it's own
- * index, not stealing from Ash (which is unused) */
-#ifndef AF_ARINC429
-#define AF_ARINC429		AF_ASH
-#endif
-
-/* should be in include/linux/socket.h, and should have it's own
- * index, not stealing from Ash (which is unused) */
-#ifndef PF_ARINC429
-#define PF_ARINC429		AF_ARINC429
-#endif
-
-/* should be in include/uapi/linux/if_arp.h */
-#ifndef ARPHRD_ARINC429
-#define ARPHRD_ARINC429	281
-#endif
-
-/* should be in include/uapi/linux/if_ether.h */
-#ifndef ETH_P_ARINC429
-#define ETH_P_ARINC429	0x001D
-#endif
-
-/************************************************************************/
-
 /* ARINC429 kernel definitions */
 
 /*
@@ -67,21 +37,16 @@
  */
 
 /**
- * struct arinc429_word - basic ARINC429 word structure
+ * struct arinc429_frame - basic ARINC429 frame structure
  * @label:	ARINC429 label
  * @data:	ARINC429 P, SSM, DATA and SDI
  */
-union arinc429_word {
-	__u32 raw;
-	struct {
-		__u32 label:8;
-		__u32 sdi:2;
-		__u32 data:21;
-		__u32 parity:1;
-	} fmt;
+struct arinc429_frame {
+	__u8	label;		/* 8 bit label */
+	__u8	data[3];	/* Up-to 23 bits are valid. */
 };
 
-#define ARINC429_WORD_SIZE	(sizeof(union arinc429_word))
+#define ARINC429_MTU		(sizeof(struct arinc429_frame))
 
 /* particular protocols of the protocol family PF_ARINC429 */
 #define ARINC429_RAW		1 /* RAW sockets */

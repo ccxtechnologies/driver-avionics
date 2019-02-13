@@ -1,0 +1,32 @@
+menu "ARINC429 Device Drivers"
+
+config ARINC429_VARINC429
+	tristate "Virtual Local ARINC429 Interface (varinc429)"
+	---help---
+	  Similar to the network loopback devices, varinc429 offers a
+	  virtual local ARINC429 interface.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called varinc429.
+
+config ARINC429_DEV
+	tristate "Platform ARINC429 drivers with Netlink support"
+	default y
+	---help---
+	  Enables the common framework for platform ARINC429 drivers with Netlink
+	  support. This is the standard library for ARINC429 drivers.
+	  If unsure, say Y.
+
+if ARINC429_DEV
+
+endif
+
+config ARINC429_DEBUG_DEVICES
+	bool "ARINC429 devices debugging messages"
+	---help---
+	  Say Y here if you want the ARINC429 device drivers to produce a bunch of
+	  debug messages to the system log.  Select this if you are having
+	  a problem with ARINC429 support and want to see more of what is going
+	  on.
+
+endmenu

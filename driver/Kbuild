@@ -1,18 +1,7 @@
-ccflags-y 		:= -I$(src)/include
 ccflags-y		+= -D__CHECK_ENDIAN__
 ccflags-y		+= -DDEBUG
 
-# ARINC-429 Device Drivers (would be in drivers/net/arinc429 in the kernel)
-obj-m			+= varinc429.o
-varinc429-y		:= devices/varinc429.o
-
-obj-m			+= arinc429-dev.o
-arinc429-dev-y	:= devices/dev.o
-
 # ARINC-429 Network interfaces (would be in net/arinc429 in the kernel)
 obj-m			+= arinc429.o
-arinc429-y		:= net/af_arinc429.o
-
-obj-m			+= arinc429-raw.o
-arinc429-raw-y	:= net/raw.o
+arinc429-y		:= af_arinc429.o
 

@@ -5,7 +5,6 @@
  * using the PF_ARINC429 core.
  *
  * Copyright (C) 2015 Marek Vasut <marex@denx.de>
- * Updates Copyright (C) 2019 CCX Technologies Inc. <charles@ccxtechnologies.com>
  *
  * Based on the SocketCAN stack.
  */
@@ -13,14 +12,14 @@
 #ifndef __ARINC429_CORE_H__
 #define __ARINC429_CORE_H__
 
-#include "arinc429.h"
+#include <linux/arinc429.h>
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 
-#define ARINC429_VERSION "20190212"
+#define ARINC429_VERSION "20151101"
 
 /* Increment this number each time you change some user-space interface */
-#define ARINC429_ABI_VERSION "2"
+#define ARINC429_ABI_VERSION "1"
 
 #define ARINC429_VERSION_STRING		\
 	"rev " ARINC429_VERSION " abi " ARINC429_ABI_VERSION
@@ -55,7 +54,7 @@ extern void arinc429_rx_unregister(struct net_device *dev,
 				   void (*func)(struct sk_buff *, void *),
 				   void *data);
 
-extern int arinc429_egress(struct sk_buff *skb);
+extern int arinc429_send(struct sk_buff *skb, int loop);
 extern int arinc429_ioctl(struct socket *sock, unsigned int cmd,
 			  unsigned long arg);
 

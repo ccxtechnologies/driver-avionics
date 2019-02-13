@@ -1,0 +1,31 @@
+#
+# ARINC429 network layer core configuration
+#
+
+menuconfig ARINC429
+	depends on NET
+	tristate "ARINC429 bus subsystem support"
+	---help---
+	  ARINC429 is a slow communication protocol used in avionics.
+	  More information on the ARINC429 protocol family PF_ARINC429
+	  is contained in <Documentation/networking/arinc429.txt>.
+
+	  If you want ARINC429 support you should say Y here and also to
+	  the specific driver for your controller(s) below.
+
+if ARINC429
+
+config ARINC429_RAW
+	tristate "Raw ARINC429 Protocol"
+	default y
+	---help---
+	  The raw ARINC429 protocol option offers access to the ARINC429
+	  bus via the BSD socket API. You probably want to use the raw
+	  socket in most cases where no higher level protocol is being
+	  used. The raw socket has several filter options e.g. ID masking
+	  / error frames. To receive/send raw ARINC429 messages, use AF_ARINC429
+	  with protocol ARINC429_RAW.
+
+source "drivers/net/arinc429/Kconfig"
+
+endif

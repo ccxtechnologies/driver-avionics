@@ -1,10 +1,5 @@
 # driver-arinc429
-Socket based ARINC-429 Driver for Linux similar to SocketCAN
-
-This started with the work done by Marek Vasut (thanks Mark!)
-[submitted in this mailing list posting](https://www.mail-archive.com/netdev@vger.kernel.org/msg85466.html).
-It looks like this was never brought into the Kernel because there were multiple follow-up ideas about merging
-it with SocketCAN; which is maybe a good idea, but is outside the scope of our requirements for this driver.
+Socket based ARINC-429 Driver for Linux
 
 ## Notes on Kernel Header Files
 

@@ -4,7 +4,6 @@
  * Definitions for the ARINC429 netlink interface
  *
  * Copyright (C) 2015 Marek Vasut <marex@denx.de>
- * Updates Copyright (C) 2019 CCX Technologies Inc. <charles@ccxtechnologies.com>
  *
  * Based on the SocketARINC429 stack.
  *
@@ -27,7 +26,8 @@
  * ARINC429 data rate parameters
  */
 struct arinc429_rate {
-	__u32 rx_rate;		/* ARINC429 bus rate [Hz] */
+	__u32 rx_rate;		/* ARINC429 bus RX rate [Hz] */
+	__u32 tx_rate;		/* ARINC429 bus TX rate [Hz] */
 };
 
 /*

@@ -20,8 +20,17 @@
 #ifndef _UAPI_ARINC429_RAW_H
 #define _UAPI_ARINC429_RAW_H
 
-#include "arinc429.h"
+#include <linux/arinc429.h>
 
 #define SOL_ARINC429_RAW (SOL_ARINC429_BASE + ARINC429_RAW)
+
+/* for socket options affecting the socket (not the global system) */
+
+enum {
+	ARINC429_RAW_FILTER = 1,	/* set 0 .. n arinc429_filter(s)     */
+	ARINC429_RAW_LOOPBACK,		/* local loopback (default:on)       */
+	ARINC429_RAW_RECV_OWN_MSGS,	/* receive my own msgs (default:off) */
+	ARINC429_RAW_JOIN_FILTERS,	/* all filters must match to trigger */
+};
 
 #endif /* !_UAPI_ARINC429_RAW_H */

@@ -2,7 +2,6 @@
  * varinc429.c - Virtual ARINC429 interface
  *
  * Copyright (C) 2015 Marek Vasut <marex@denx.de>
- * Updates Copyright (C) 2019 CCX Technologies Inc. <charles@ccxtechnologies.com>
  *
  * Based on the SocketCAN stack.
  *
@@ -25,52 +24,83 @@
 #include <linux/netdevice.h>
 #include <linux/if_arp.h>
 #include <linux/if_ether.h>
-#include "arinc429.h"
-#include "dev.h"
-#include "skb.h"
+#include <linux/arinc429.h>
+#include <linux/arinc429/dev.h>
+#include <linux/arinc429/skb.h>
 #include <linux/slab.h>
 #include <net/rtnetlink.h>
 
 MODULE_DESCRIPTION("Virtual ARINC429 interface");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Marek Vasut <marex@denx.de>");
-MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 
-static void varinc429_rx(struct sk_buff *tx_skb, struct net_device *dev)
+/*
+ * ARINC429 test feature:
+ * Enable the echo on driver level for testing the ARINC429 core echo modes.
+ */
+
+static bool echo; /* echo testing. Default: 0 (Off) */
+module_param(echo, bool, S_IRUGO);
+MODULE_PARM_DESC(echo, "Echo sent frames (for testing). Default: 0 (Off)");
+
+static void varinc429_rx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct net_device_stats *stats = &dev->stats;
-	struct sk_buff *rx_skb;
-	union arinc429_word *cf;
-
-
-	rx_skb = alloc_arinc429_skb(dev, &cf, tx_skb->len/ARINC429_WORD_SIZE);
-
-	if (!rx_skb)
-		return;
-
-	if (skb_copy_bits(tx_skb, 0, (void*)cf, tx_skb->len))
-		BUG();
 
 	stats->rx_packets++;
-	stats->rx_bytes += rx_skb->len;
+	stats->rx_bytes += ARINC429_MTU;
 
-	netif_rx_ni(rx_skb);
+	skb->pkt_type  = PACKET_BROADCAST;
+	skb->dev       = dev;
+	skb->ip_summed = CHECKSUM_UNNECESSARY;
+
+	if (!(skb->tstamp.tv64))
+		__net_timestamp(skb);
+
+	netif_rx_ni(skb);
 }
 
 static netdev_tx_t varinc429_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct net_device_stats *stats = &dev->stats;
+	int loop;
 
 	if (arinc429_dropped_invalid_skb(dev, skb))
 		return NETDEV_TX_OK;
 
 	stats->tx_packets++;
-	stats->tx_bytes += skb->len;
+	stats->tx_bytes += ARINC429_MTU;
 
-	varinc429_rx(skb, dev);
+	/* set flag whether this packet has to be looped back */
+	loop = skb->pkt_type == PACKET_LOOPBACK;
 
-	consume_skb(skb);
+	if (!echo) {
+		/* no echo handling available inside this driver */
 
+		if (loop) {
+			/*
+			 * Only count the packets here, because the
+			 * ARINC429 core already did the echo for us
+			 */
+			stats->rx_packets++;
+			stats->rx_bytes += ARINC429_MTU;
+		}
+		consume_skb(skb);
+		return NETDEV_TX_OK;
+	}
+
+	/* Perform standard echo handling for ARINC429 network interfaces */
+	if (loop) {
+		skb = arinc429_create_echo_skb(skb);
+		if (!skb)
+			return NETDEV_TX_OK;
+
+		/* Receive with packet counting */
+		varinc429_rx(skb, dev);
+	} else {
+		/* No looped packets => no counting */
+		consume_skb(skb);
+	}
 	return NETDEV_TX_OK;
 }
 
@@ -80,7 +110,7 @@ static int varinc429_change_mtu(struct net_device *dev, int new_mtu)
 	if (dev->flags & IFF_UP)
 		return -EBUSY;
 
-	if (new_mtu % ARINC429_WORD_SIZE)
+	if (new_mtu != ARINC429_MTU)
 		return -EINVAL;
 
 	dev->mtu = new_mtu;
@@ -95,11 +125,16 @@ static const struct net_device_ops varinc429_netdev_ops = {
 static void varinc429_setup(struct net_device *dev)
 {
 	dev->type		= ARPHRD_ARINC429;
-	dev->mtu		= 32*ARINC429_WORD_SIZE;
+	dev->mtu		= ARINC429_MTU;
 	dev->hard_header_len	= 0;
 	dev->addr_len		= 0;
 	dev->tx_queue_len	= 0;
 	dev->flags		= IFF_NOARP;
+
+	/* set flags according to driver capabilities */
+	if (echo)
+		dev->flags |= IFF_ECHO;
+
 	dev->netdev_ops		= &varinc429_netdev_ops;
 	dev->destructor		= free_netdev;
 }
@@ -112,6 +147,10 @@ static struct rtnl_link_ops varinc429_link_ops __read_mostly = {
 static __init int varinc429_init_module(void)
 {
 	pr_info("varinc429: Virtual ARINC429 interface driver\n");
+
+	if (echo)
+		pr_info("varinc429: enabled echo on driver level.\n");
+
 	return rtnl_link_register(&varinc429_link_ops);
 }
 
