@@ -16,24 +16,107 @@
  */
 
 #include <linux/module.h>
+#include <linux/module.h>
+#include <linux/kernel.h>
 #include <linux/net.h>
+#include <linux/netdevice.h>
+#include <linux/init.h>
+
 #include "arinc429.h"
 
 MODULE_DESCRIPTION("ARINC429 Socket Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
+MODULE_VERSION("1.0.0");
 
 MODULE_ALIAS_NETPROTO(PF_ARINC429);
 
+static int arinc429_sock_create(struct net *net, struct socket *sock,
+				int protocol, int kern)
+{
+	pr_debug("Creating new ARINC429 socket.\n");
+	return 0;
+}
+
+static const struct net_proto_family arinc429_net_proto_family = {
+	.family	= PF_ARINC429,
+	.create	= arinc429_sock_create,
+	.owner	= THIS_MODULE,
+};
+
+static int arinc429_netdev_notifier(struct notifier_block *nb,
+				    unsigned long msg, void *ptr)
+{
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
+	struct dev_rcv_lists *d;
+
+	if (!net_eq(dev_net(dev), &init_net))
+		return NOTIFY_DONE;
+
+	if (dev->type != ARPHRD_ARINC429)
+		return NOTIFY_DONE;
+
+	switch (msg) {
+	case NETDEV_REGISTER:
+		pr_info("Registering new ARINC-429 Device.\n");
+		break;
+
+	case NETDEV_UNREGISTER:
+		pr_info("Unregistering ARINC-429 Device.\n");
+		break;
+	}
+
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block arinc429_notifier_block __read_mostly = {
+	.notifier_call = arinc429_netdev_notifier,
+};
+
+static int arinc429_packet_ingress(struct sk_buff *skb, struct net_device *dev,
+				   struct packet_type *pt,
+				   struct net_device *orig_dev)
+{
+	pr_debug("Ingress packet.\n");
+
+	kfree_skb(skb);
+	return NET_RX_DROP;
+}
+
+static struct packet_type arinc429_packet_type __read_mostly = {
+	.type	= cpu_to_be16(ETH_P_ARINC429),
+	.func	= arinc429_packet_ingress,
+};
+
 static __init int arinc429_init(void)
 {
-	pr_info("Initialising ARINC-429 Socket Driver");
+	pr_info("Initialising ARINC-429 Socket Driver\n");
+
+	pr_debug("Registering Socket Type\n");
+	sock_register(&arinc429_net_proto_family);
+
+	pr_debug("Registering Netdevice Notifier\n");
+	register_netdevice_notifier(&arinc429_notifier_block);
+
+	pr_debug("Adding Packet Type\n");
+	dev_add_pack(&arinc429_packet_type);
+
 	return 0;
 }
 
 static __exit void arinc429_exit(void)
 {
-	pr_info("Exiting ARINC-429 Socket Driver");
+	pr_debug("Removing Packet Type\n");
+	dev_remove_pack(&arinc429_packet_type);
+
+	pr_debug("Ungeristering Netdevice Notifier\n");
+	unregister_netdevice_notifier(&arinc429_notifier_block);
+
+	pr_debug("Ungeristering Socket Type\n");
+	sock_unregister(PF_ARINC429);
+
+	pr_info("Exited ARINC-429 Socket Driver\n");
+
 }
 
 module_init(arinc429_init);

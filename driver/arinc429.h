@@ -25,13 +25,13 @@
 /* should be in include/linux/socket.h, and should have it's own
  * index, not stealing from Ash (which is unused) */
 #ifndef AF_ARINC429
-#define AF_ARINC429		AF_ASH
+#define AF_ARINC429	AF_ASH
 #endif
 
 /* should be in include/linux/socket.h, and should have it's own
  * index, not stealing from Ash (which is unused) */
 #ifndef PF_ARINC429
-#define PF_ARINC429		AF_ARINC429
+#define PF_ARINC429	AF_ARINC429
 #endif
 
 /* should be in include/uapi/linux/if_arp.h */
