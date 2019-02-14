@@ -90,15 +90,23 @@ static struct packet_type arinc429_packet_type __read_mostly = {
 
 static __init int arinc429_init(void)
 {
+	int rc;
+
 	pr_info("Initialising ARINC-429 Socket Driver\n");
 
-	pr_debug("Registering Socket Type\n");
-	sock_register(&arinc429_net_proto_family);
+	rc = sock_register(&arinc429_net_proto_family);
+	if (rc) {
+		pr_error("Failed to register ARINC-429 Socket Type: %d\n", rc);
+		return rc;
+	}
 
-	pr_debug("Registering Netdevice Notifier\n");
-	register_netdevice_notifier(&arinc429_notifier_block);
+	rc = register_netdevice_notifier(&arinc429_notifier_block);
+	if (rc) {
+		pr_error("Failed to register ARINC-429 with NetDev: %d\n", rc);
+		sock_unregister(PF_ARINC429);
+		return rc;
+	}
 
-	pr_debug("Adding Packet Type\n");
 	dev_add_pack(&arinc429_packet_type);
 
 	return 0;
