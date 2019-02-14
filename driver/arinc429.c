@@ -24,7 +24,7 @@
 
 #include "arinc429.h"
 
-MODULE_DESCRIPTION("ARINC429 Socket Driver");
+MODULE_DESCRIPTION("ARINC-429 Socket Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.0.0");
@@ -48,7 +48,6 @@ static int arinc429_netdev_notifier(struct notifier_block *nb,
 				    unsigned long msg, void *ptr)
 {
 	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
-	struct dev_rcv_lists *d;
 
 	if (!net_eq(dev_net(dev), &init_net))
 		return NOTIFY_DONE;
@@ -96,13 +95,13 @@ static __init int arinc429_init(void)
 
 	rc = sock_register(&arinc429_net_proto_family);
 	if (rc) {
-		pr_error("Failed to register ARINC-429 Socket Type: %d\n", rc);
+		pr_err("Failed to register ARINC-429 Socket Type: %d\n", rc);
 		return rc;
 	}
 
 	rc = register_netdevice_notifier(&arinc429_notifier_block);
 	if (rc) {
-		pr_error("Failed to register ARINC-429 with NetDev: %d\n", rc);
+		pr_err("Failed to register ARINC-429 with NetDev: %d\n", rc);
 		sock_unregister(PF_ARINC429);
 		return rc;
 	}
@@ -114,17 +113,17 @@ static __init int arinc429_init(void)
 
 static __exit void arinc429_exit(void)
 {
-	pr_debug("Removing Packet Type\n");
+	int rc;
+
 	dev_remove_pack(&arinc429_packet_type);
 
-	pr_debug("Ungeristering Netdevice Notifier\n");
-	unregister_netdevice_notifier(&arinc429_notifier_block);
+	rc = unregister_netdevice_notifier(&arinc429_notifier_block);
+	if (rc)
+		pr_err("Failed to unregister ARINC-429 with NetDev: %d\n", rc);
 
-	pr_debug("Ungeristering Socket Type\n");
 	sock_unregister(PF_ARINC429);
 
 	pr_info("Exited ARINC-429 Socket Driver\n");
-
 }
 
 module_init(arinc429_init);

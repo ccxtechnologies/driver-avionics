@@ -3,3 +3,5 @@ ccflags-y		+= -DDEBUG
 
 obj-m			+= arinc429.o
 
+obj-m			+= varinc429.o
+
