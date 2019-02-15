@@ -60,4 +60,12 @@ union arinc429_word {
 
 #define ARINC429_WORD_SIZE	(sizeof(union arinc429_word))
 
+struct sockaddr_arinc429 {
+	__kernel_sa_family_t arinc429_family;
+	int arinc429_ifindex;
+	union {
+		/* reserved for future prototcols */
+	} arinc429_addr;
+};
+
 #endif /* __ARINC429_H__ */
