@@ -353,10 +353,64 @@ static struct proto proto_raw = {
 
 /* ====== Socket Creator ====== */
 
+static void arinc429_sock_destruct(struct sock *sk)
+{
+	skb_queue_purge(&sk->sk_receive_queue);
+}
+
 static int arinc429_sock_create(struct net *net, struct socket *sock,
 				int protocol, int kern)
 {
+	struct sock *sk;
+	static const struct proto_ops* _proto_opts;
+	static struct proto* _proto;
+	int err;
+
 	pr_debug("Creating new ARINC429 socket.\n");
+
+	sock->state = SS_UNCONNECTED;
+
+	if (!net_eq(net, &init_net)) {
+		pr_err("Device not in namespace\n");
+		return -EAFNOSUPPORT;
+	}
+
+	switch (protocol) {
+	case ARINC429_PROTO_RAW:
+		pr_debug("Configurtion Raw Protocol.\n");
+
+		_proto_opts = &proto_raw_ops;
+		_proto = &proto_raw;
+
+		break;
+
+	default:
+		pr_err("Invalid protocol %d\n", protocol);
+		return -EPROTONOSUPPORT;
+	}
+
+	sock->ops = _proto_opts;
+
+	sk = sk_alloc(net, PF_ARINC429, GFP_KERNEL, _proto, kern);
+	if (!sk) {
+		pr_err("Failed to allocate socket.\n");
+		return -ENOMEM;
+	}
+
+	sock_init_data(sock, sk);
+	sk->sk_destruct = arinc429_sock_destruct;
+
+	if (sk->sk_prot->init) {
+		err = sk->sk_prot->init(sk);
+		if (err) {
+			pr_err("Failed to initialize socket protocol: %d\n",
+			       err);
+			sock_orphan(sk);
+			sock_put(sk);
+			return err;
+		}
+	}
+
 	return 0;
 }
 
