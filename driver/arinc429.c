@@ -39,6 +39,70 @@ struct arinc429_skb_priv {
 	union arinc429_word word[0];
 };
 
+/* ====== Socket Lists ====== */
+
+/* We need to track the lost of open sockets per device so that
+ * we know where to send ingress packets */
+
+struct device_socket {
+	struct sock *sk;
+	void (*ingress_func)(struct sk_buff*, struct sock *);
+};
+
+struct device_socket_list {
+	struct hlist_head socket;
+	int unresiterd;
+	int entries;
+};
+
+static DEFINE_SPINLOCK(device_socket_lock);
+
+static void device_remove_socket_list(struct net_device *dev)
+{
+	struct device_socket_list *sk_list;
+
+	pr_debug("arinc429: Removing socket list from %s\n",dev->name);
+
+	spin_lock(&device_socket_lock);
+
+	sk_list = (struct device_socket_list *)dev->ml_priv;
+	if (sk_list) {
+		sk_list->remove_on_zero_entries = 1;
+		if (!sk_list->entries)
+			kfree(sk_list);
+			dev->ml_priv = NULL;
+		}
+	} else {
+		pr_err("arinc429: receive list not found for device %s\n",
+		       dev->name);
+	}
+
+	spin_unlock(&arinc429_rcvlists_lock);
+}
+
+static int device_add_socket_list(struct net_device *dev)
+{
+	struct device_socket_list *sk_list;
+
+	pr_debug("arinc429: Adding socket list to %s\n",dev->name);
+
+	if (dev->ml_priv) {
+		pr_err("arinc429: Device %s already has a socket list.\n",
+		       dev->name);
+		return -EINVAL;
+	}
+
+	sk_list = kzalloc(sizeof(*d), GFP_KERNEL);
+	if (!dsl) {
+		pr_err("arinc429: Failed to allocate socket list.\n");
+		return -ENOMEM;
+	}
+
+	dev->ml_priv = sk_list;
+
+	return 0;
+}
+
 /* ====== Raw Protocol ===== */
 
 struct proto_raw_sock {
@@ -54,22 +118,24 @@ static int proto_raw_bind(struct socket *sock, struct sockaddr *saddr, int len)
 	struct proto_raw_sock *psk = (struct proto_raw_sock*)sk;
 	struct net_device *dev;
 
-	pr_debug("Binding ARINC-429 Raw Socket\n");
+	pr_debug("arinc429: Binding ARINC-429 Raw Socket\n");
 
 	if (len != sizeof(*addr)) {
-		pr_err("Socket address length should be %ld.\n", sizeof(*addr));
+		pr_err("arinc429-raw: Address length should"
+		       " be %ld not %d.\n", sizeof(*addr), len);
 		return -EINVAL;
 	}
 
 	if (!addr->arinc429_ifindex) {
-		pr_err("Must specify an interface index in socket address.\n");
+		pr_err("arinc429-raw: Must specify ifindex in Address.\n");
 		return -EINVAL;
 	}
 
 	lock_sock(sk);
 
 	if (psk->bound && (addr->arinc429_ifindex == psk->ifindex)) {
-		pr_debug("Socket already bound to %d\n", psk->ifindex);
+		pr_debug("arinc429-raw: Socket already bound to %d.\n",
+			 psk->ifindex);
 		release_sock(sk);
 		return 0;
 	}
@@ -77,13 +143,14 @@ static int proto_raw_bind(struct socket *sock, struct sockaddr *saddr, int len)
 	dev = dev_get_by_index(sock_net(sk), addr->arinc429_ifindex);
 
 	if (!dev) {
-		pr_err("Can't find device %d.\n", addr->arinc429_ifindex);
+		pr_err("arinc429-raw: Can't find device %d.\n",
+		       addr->arinc429_ifindex);
 		release_sock(sk);
 		return -ENODEV;
 	}
 
 	if (dev->type != ARPHRD_ARINC429) {
-		pr_err("Device %d isn't an ARINC-429 Device.\n",
+		pr_err("arinc429-raw: Device %d isn't an ARINC-429 Device.\n",
 		       addr->arinc429_ifindex);
 		dev_put(dev);
 		release_sock(sk);
@@ -115,7 +182,7 @@ static int proto_raw_release(struct socket *sock)
 	if (!sk)
 		return 0;
 
-	pr_debug("Releasing ARINC-429 Raw Socket\n");
+	pr_debug("arinc429-raw: Releasing ARINC-429 Raw Socket\n");
 
 	lock_sock(sk);
 
@@ -174,10 +241,10 @@ static int proto_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 	int ifindex;
 	int err;
 
-	pr_debug("Sending a Raw message\n");
+	pr_debug("arinc429-raw: Sending a Raw message\n");
 
 	if (unlikely(size % ARINC429_WORD_SIZE)) {
-		pr_warn("ARINC-429 Packet must be multiple of word size: %ld\n",
+		pr_warn("arinc429-raw: Must be multiple of word size: %ld\n",
 			ARINC429_WORD_SIZE);
 		return -EINVAL;
 	}
@@ -194,34 +261,36 @@ static int proto_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 			return -EINVAL;
 
 		ifindex = addr->arinc429_ifindex;
-		pr_debug("ifindex %d from message.\n", ifindex);
+		pr_debug("arinc429-raw: ifindex %d from message.\n", ifindex);
 
 	} else {
 		ifindex = psk->ifindex;
-		pr_debug("ifindex %d from socket.\n", ifindex);
+		pr_debug("arinc429-raw: ifindex %d from socket.\n", ifindex);
 	}
 
 	/* Make sure the device is valid */
 	dev = dev_get_by_index(sock_net(sk), ifindex);
 	if (!dev) {
-		pr_err("Can't find device %d.\n", ifindex);
+		pr_err("arinc429-raw: Can't find device %d.\n", ifindex);
 		return -ENXIO;
 	}
 
 	if (unlikely(dev->type != ARPHRD_ARINC429)) {
-		pr_err("Device %d isn't an ARINC-429 Device.\n", ifindex);
+		pr_err("arinc429-raw: Device %d isn't an ARINC-429 Device.\n",
+		       ifindex);
 		dev_put(dev);
 		return -ENODEV;
 	}
 
 	if (unlikely(size > dev->mtu)) {
-		pr_err("Packet must be less than MTU of %d bytes.\n", dev->mtu);
+		pr_err("arinc429-raw: Doesn't fit in MTU of %d bytes.\n",
+		       dev->mtu);
 		dev_put(dev);
 		return -EMSGSIZE;
 	}
 
 	if (unlikely(!(dev->flags & IFF_UP))) {
-		pr_err("Device isn't up\n");
+		pr_err("arinc429-raw: Device isn't up\n");
 		dev_put(dev);
 		return -ENETDOWN;
 	}
@@ -231,7 +300,7 @@ static int proto_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 				  msg->msg_flags & MSG_DONTWAIT, &err);
 
 	if (!skb) {
-		pr_err("Unable to allocate skbuff: %d.\n", err);
+		pr_err("arinc429-raw: Unable to allocate skbuff: %d.\n", err);
 		dev_put(dev);
 		return err;
 	}
@@ -241,7 +310,7 @@ static int proto_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 
 	err = memcpy_from_msg(skb_put(skb, size), msg, size);
 	if (err < 0) {
-		pr_err("Unable to memcpy from mesg: %d.\n", err);
+		pr_err("arinc429-raw: Unable to memcpy from mesg: %d.\n", err);
 		kfree_skb(skb);
 		dev_put(dev);
 		return err;
@@ -267,7 +336,7 @@ static int proto_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 	}
 
 	if (err) {
-		pr_err("Send to netdevice failed: %d\n", err);
+		pr_err("arinc429-raw: Send to netdevice failed: %d\n", err);
 		dev_put(dev);
 		return err;
 	}
@@ -284,14 +353,14 @@ static int proto_raw_recvmsg(struct socket *sock,
 	int err = 0;
 	int noblock;
 
-	pr_debug("Receiving a Raw message\n");
+	pr_debug("arinc429-raw: Receiving a Raw message\n");
 
 	noblock = flags & MSG_DONTWAIT;
 	flags &= ~MSG_DONTWAIT;
 
 	skb = skb_recv_datagram(sk, flags, noblock, &err);
 	if (!skb) {
-		pr_err("No data in receive message\n");
+		pr_debug("arinc429-raw: No data in receive message\n");
 		return err;
 	}
 
@@ -303,7 +372,7 @@ static int proto_raw_recvmsg(struct socket *sock,
 
 	err = memcpy_to_msg(msg, skb->data, size);
 	if (err < 0) {
-		pr_err("Failed to copy message data.");
+		pr_err("arinc429-raw: Failed to copy message data.\n");
 		skb_free_datagram(sk, skb);
 		return err;
 	}
@@ -362,38 +431,38 @@ static int arinc429_sock_create(struct net *net, struct socket *sock,
 				int protocol, int kern)
 {
 	struct sock *sk;
-	static const struct proto_ops* _proto_opts;
-	static struct proto* _proto;
+	static const struct proto_ops* popts;
+	static struct proto* p;
 	int err;
 
-	pr_debug("Creating new ARINC429 socket.\n");
+	pr_debug("arinc429: Creating new ARINC429 socket.\n");
 
 	sock->state = SS_UNCONNECTED;
 
 	if (!net_eq(net, &init_net)) {
-		pr_err("Device not in namespace\n");
+		pr_err("arinc429: Device not in namespace\n");
 		return -EAFNOSUPPORT;
 	}
 
 	switch (protocol) {
 	case ARINC429_PROTO_RAW:
-		pr_debug("Configurtion Raw Protocol.\n");
+		pr_debug("arinc429: Configurtion Raw Protocol.\n");
 
-		_proto_opts = &proto_raw_ops;
-		_proto = &proto_raw;
+		popts = &proto_raw_ops;
+		p = &proto_raw;
 
 		break;
 
 	default:
-		pr_err("Invalid protocol %d\n", protocol);
+		pr_err("arinc429: Invalid protocol %d\n", protocol);
 		return -EPROTONOSUPPORT;
 	}
 
-	sock->ops = _proto_opts;
+	sock->ops = popts;
 
-	sk = sk_alloc(net, PF_ARINC429, GFP_KERNEL, _proto, kern);
+	sk = sk_alloc(net, PF_ARINC429, GFP_KERNEL, p, kern);
 	if (!sk) {
-		pr_err("Failed to allocate socket.\n");
+		pr_err("arinc429: Failed to allocate socket.\n");
 		return -ENOMEM;
 	}
 
@@ -403,7 +472,7 @@ static int arinc429_sock_create(struct net *net, struct socket *sock,
 	if (sk->sk_prot->init) {
 		err = sk->sk_prot->init(sk);
 		if (err) {
-			pr_err("Failed to initialize socket protocol: %d\n",
+			pr_err("arinc429: Failed to init socket protocol: %d\n",
 			       err);
 			sock_orphan(sk);
 			sock_put(sk);
@@ -436,11 +505,13 @@ static int arinc429_netdev_notifier(struct notifier_block *nb,
 
 	switch (msg) {
 	case NETDEV_REGISTER:
-		pr_info("Registering new ARINC-429 Device.\n");
+		pr_info("arinc429: Registering new ARINC-429 Device.\n");
+		device_add_socket_list(dev);
 		break;
 
 	case NETDEV_UNREGISTER:
-		pr_info("Unregistering ARINC-429 Device.\n");
+		pr_info("arinc429: Unregistering ARINC-429 Device.\n");
+		device_remove_socket_list(dev);
 		break;
 	}
 
@@ -457,10 +528,36 @@ static int arinc429_packet_ingress(struct sk_buff *skb, struct net_device *dev,
 				   struct packet_type *pt,
 				   struct net_device *orig_dev)
 {
-	pr_debug("Ingress packet.\n");
+	int err;
 
-	kfree_skb(skb);
-	return NET_RX_DROP;
+	pr_debug("arinc429: Ingress packet.\n");
+
+	if (unlikely(!net_eq(dev_net(dev), &init_net))) {
+		pr_err("Device not in namespace\n");
+		kfree_skb(skb);
+		return NET_RX_DROP;
+	}
+
+	err = WARN_ONCE(dev->type != ARPHRD_ARINC429 ||
+			skb->len % ARINC429_WORD_SIZE,
+			"arinc429: dropped non conform ARINC429 skbuf:"
+			" dev type %d, len %d\n", dev->type, skb->len);
+	if (err) {
+		pr_err("Device not in namespace: %d\n", err);
+		kfree_skb(skb);
+		return NET_RX_DROP;
+	}
+
+	pr_debug("arinc429: Locking RCU.\n");
+	rcu_read_lock();
+
+	pr_debug("arinc429: Unlocking RCU.\n");
+	rcu_read_unlock();
+
+	pr_debug("arinc429: Consuming skb.\n");
+	consume_skb(skb);
+
+	return NET_RX_SUCCESS;
 }
 
 static struct packet_type arinc429_packet_type __read_mostly = {
@@ -474,24 +571,24 @@ static __init int arinc429_init(void)
 {
 	int rc;
 
-	pr_info("Initialising ARINC-429 Socket Driver\n");
+	pr_info("arinc429: Initialising ARINC-429 Socket Driver\n");
 
 	rc = proto_register(&proto_raw, ARINC429_PROTO_RAW);
 	if (rc) {
-		pr_err("Failed to register ARINC-429 Raw Protocol: %d\n", rc);
+		pr_err("arinc429: Failed to register Raw Protocol: %d\n", rc);
 		return rc;
 	}
 
 	rc = sock_register(&arinc429_net_proto_family);
 	if (rc) {
-		pr_err("Failed to register ARINC-429 Socket Type: %d\n", rc);
+		pr_err("arinc429: Failed to register Socket Type: %d\n", rc);
 		proto_unregister(&proto_raw);
 		return rc;
 	}
 
 	rc = register_netdevice_notifier(&arinc429_notifier_block);
 	if (rc) {
-		pr_err("Failed to register ARINC-429 with NetDev: %d\n", rc);
+		pr_err("arinc429: Failed to register with NetDev: %d\n", rc);
 		sock_unregister(PF_ARINC429);
 		proto_unregister(&proto_raw);
 		return rc;
@@ -510,13 +607,13 @@ static __exit void arinc429_exit(void)
 
 	rc = unregister_netdevice_notifier(&arinc429_notifier_block);
 	if (rc)
-		pr_err("Failed to unregister ARINC-429 with NetDev: %d\n", rc);
+		pr_err("arinc429: Failed to unregister with NetDev: %d\n", rc);
 
 	sock_unregister(PF_ARINC429);
 
 	proto_unregister(&proto_raw);
 
-	pr_info("Exited ARINC-429 Socket Driver\n");
+	pr_info("arinc429: Exited ARINC-429 Socket Driver\n");
 }
 
 module_init(arinc429_init);

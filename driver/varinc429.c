@@ -32,6 +32,8 @@ static void varinc429_rx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct net_device_stats *stats = &dev->stats;
 
+	pr_debug("varinc429: Device rx packet\n");
+
 	stats->rx_packets++;
 	stats->rx_bytes += skb->len;
 
@@ -47,6 +49,8 @@ static netdev_tx_t varinc429_start_xmit(struct sk_buff *skb,
 {
 	struct net_device_stats *stats = &dev->stats;
 	struct sk_buff *skb_rx;
+
+	pr_debug("varinc429: Device tx packet\n");
 
 	if (skb->protocol != htons(ETH_P_ARINC429)) {
 	    kfree_skb(skb);
@@ -82,17 +86,17 @@ static netdev_tx_t varinc429_start_xmit(struct sk_buff *skb,
 static int varinc429_change_mtu(struct net_device *dev, int mtu)
 {
 	if (dev->flags & IFF_UP) {
-		pr_err("Can't change MTU when link is up.\n");
+		pr_err("varinc429: Can't change MTU when link is up.\n");
 		return -EBUSY;
 	}
 
 	if (mtu % ARINC429_WORD_SIZE) {
-		pr_err("MTU must be a multiple of %ld (ARINC-429 word size)\n",
+		pr_err("varinc429: MTU must be a multiple of %ld (word size)\n",
 		       ARINC429_WORD_SIZE);
 		return -EINVAL;
 	}
 
-	pr_info("Setting up device %s MTU to %d\n", dev->name, mtu);
+	pr_info("varinc429: Setting up device %s MTU to %d\n", dev->name, mtu);
 
 	dev->mtu = mtu;
 	return 0;
@@ -105,7 +109,7 @@ static const struct net_device_ops varinc429_net_device_ops = {
 
 static void varinc429_rtnl_link_setup(struct net_device *dev)
 {
-	pr_info("Setting up Virtial ARINC-429 Device\n");
+	pr_info("varinc429: Setting up Virtial ARINC-429 Device\n");
 
 	dev->type		= ARPHRD_ARINC429;
 	dev->mtu		= ARINC429_WORD_SIZE*32;
@@ -126,11 +130,11 @@ static __init int varinc429_init(void)
 {
 	int rc;
 
-	pr_info("Initialising Virtial ARINC-429 Device Driver\n");
+	pr_info("varinc429: Initialising Virtial ARINC-429 Device Driver\n");
 
 	rc = rtnl_link_register(&varinc429_rtnl_link_ops);
 	if (rc) {
-		pr_err("Failed to register Virtial ARINC-429 Device: %d\n", rc);
+		pr_err("varinc429: Failed to register Virtial ARINC-429 Device: %d\n", rc);
 		return rc;
 	}
 
@@ -140,7 +144,7 @@ static __init int varinc429_init(void)
 static __exit void varinc429_exit(void)
 {
 	rtnl_link_unregister(&varinc429_rtnl_link_ops);
-	pr_info("Exited Virtial ARINC-429 Device Driver\n");
+	pr_info("varinc429: Exited Virtial ARINC-429 Device Driver\n");
 }
 
 module_init(varinc429_init);
