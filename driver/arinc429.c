@@ -20,6 +20,8 @@
 #include <linux/kernel.h>
 #include <linux/net.h>
 #include <linux/netdevice.h>
+#include <linux/skbuff.h>
+#include <linux/list.h>
 #include <net/sock.h>
 #include <linux/init.h>
 
@@ -44,45 +46,150 @@ struct arinc429_skb_priv {
 /* We need to track the lost of open sockets per device so that
  * we know where to send ingress packets */
 
-struct device_socket {
+struct dev_socket_info {
+	struct hlist_node node;
 	struct sock *sk;
 	void (*ingress_func)(struct sk_buff*, struct sock *);
 };
 
-struct device_socket_list {
-	struct hlist_head socket;
-	int unresiterd;
+struct dev_socket_list {
+	struct hlist_head head;
+	int remove_on_zero_entries;
 	int entries;
 };
 
-static DEFINE_SPINLOCK(device_socket_lock);
+static DEFINE_SPINLOCK(dev_socket_lock);
+static struct kmem_cache *dev_socket_cache __read_mostly;
 
-static void device_remove_socket_list(struct net_device *dev)
+static int dev_register_socket(struct net_device *dev,
+			 void (*ingress_func)(struct sk_buff *, struct sock *),
+			 struct sock *sk)
 {
-	struct device_socket_list *sk_list;
+	struct dev_socket_list *sk_list;
+	struct dev_socket_info *sk_info;
+
+	pr_debug("arinc429: Registering socket with %s\n", dev->name);
+
+	if (dev && dev->type != ARPHRD_ARINC429) {
+		pr_err("arinc429: %s is not a valid device.\n", dev->name);
+		return -ENODEV;
+	}
+
+	if (!dev->ml_priv) {
+		pr_err("arinc429: %s has no registerd socket list.\n",
+		       dev->name);
+		return -ENODEV;
+	}
+
+	sk_info = kmem_cache_alloc(dev_socket_cache, GFP_KERNEL);
+	if (!sk_info) {
+		pr_info("Failed to allocate socket info\n");
+		return -ENOMEM;
+	}
+
+	sk_info->sk = sk;
+	sk_info->ingress_func = ingress_func;
+
+	spin_lock(&dev_socket_lock);
+
+	sk_list = (struct dev_socket_list *)dev->ml_priv;
+
+	hlist_for_each_entry_rcu(sk_info, &sk_list->head, node) {
+		if (sk_info->ingress_func == ingress_func
+		    && sk_info->sk == sk) {
+			pr_info("Socket already attached to %s\n", dev->name);
+			kmem_cache_free(dev_socket_cache, sk_info);
+			spin_unlock(&dev_socket_lock);
+			return 0;
+		}
+	}
+
+	hlist_add_head_rcu(&sk_info->node, &sk_list->head);
+	sk_list->entries++;
+
+	spin_unlock(&dev_socket_lock);
+
+	return 0;
+}
+
+static void dev_unregister_socket(struct net_device *dev,
+			 void (*ingress_func)(struct sk_buff *, struct sock *),
+			 struct sock *sk)
+{
+	struct dev_socket_list *sk_list;
+	struct dev_socket_info *sk_info;
+
+	pr_debug("arinc429: Unregistering socket with %s\n", dev->name);
+
+	if (dev && dev->type != ARPHRD_ARINC429) {
+		pr_err("arinc429: %s is not a valid device.\n", dev->name);
+		return;
+	}
+
+	if (!dev->ml_priv) {
+		pr_err("arinc429: %s has no registerd socket list.\n",
+		       dev->name);
+		return;
+	}
+
+	spin_lock(&dev_socket_lock);
+
+	sk_list = (struct dev_socket_list *)dev->ml_priv;
+
+	hlist_for_each_entry_rcu(sk_info, &sk_list->head, node) {
+		if ((sk_info->ingress_func == ingress_func)
+		    && (sk_info->sk == sk)) {
+			break;
+		}
+	}
+
+	if (!sk_info) {
+		pr_err("arinc429: failed to find socket in device %s.\n",
+		       dev->name);
+		spin_unlock(&dev_socket_lock);
+		return;
+	}
+
+	hlist_del_rcu(&sk_info->node);
+	sk_list->entries--;
+
+	if (sk_list->remove_on_zero_entries && (sk_list->entries <= 0)) {
+		pr_debug("arinc429: Removing socket list from %s\n", dev->name);
+		kfree(sk_list);
+		dev->ml_priv = NULL;
+	}
+
+	spin_unlock(&dev_socket_lock);
+
+	kmem_cache_free(dev_socket_cache, sk_info);
+
+}
+
+static void dev_remove_socket_list(struct net_device *dev)
+{
+	struct dev_socket_list *sk_list;
 
 	pr_debug("arinc429: Removing socket list from %s\n",dev->name);
 
-	spin_lock(&device_socket_lock);
+	spin_lock(&dev_socket_lock);
 
-	sk_list = (struct device_socket_list *)dev->ml_priv;
+	sk_list = (struct dev_socket_list *)dev->ml_priv;
 	if (sk_list) {
 		sk_list->remove_on_zero_entries = 1;
 		if (!sk_list->entries)
 			kfree(sk_list);
-			dev->ml_priv = NULL;
-		}
+		dev->ml_priv = NULL;
 	} else {
 		pr_err("arinc429: receive list not found for device %s\n",
 		       dev->name);
 	}
 
-	spin_unlock(&arinc429_rcvlists_lock);
+	spin_unlock(&dev_socket_lock);
 }
 
-static int device_add_socket_list(struct net_device *dev)
+static int dev_add_socket_list(struct net_device *dev)
 {
-	struct device_socket_list *sk_list;
+	struct dev_socket_list *sk_list;
 
 	pr_debug("arinc429: Adding socket list to %s\n",dev->name);
 
@@ -92,8 +199,8 @@ static int device_add_socket_list(struct net_device *dev)
 		return -EINVAL;
 	}
 
-	sk_list = kzalloc(sizeof(*d), GFP_KERNEL);
-	if (!dsl) {
+	sk_list = kzalloc(sizeof(*sk_list), GFP_KERNEL);
+	if (!sk_list) {
 		pr_err("arinc429: Failed to allocate socket list.\n");
 		return -ENOMEM;
 	}
@@ -111,12 +218,18 @@ struct proto_raw_sock {
 	int bound;
 };
 
+static void raw_ingress(struct sk_buff *skb, struct sock *sk)
+{
+	pr_info("Raw ingress\n");
+}
+
 static int proto_raw_bind(struct socket *sock, struct sockaddr *saddr, int len)
 {
 	DECLARE_SOCKADDR(struct sockaddr_arinc429 *, addr, saddr);
 	struct sock *sk = sock->sk;
 	struct proto_raw_sock *psk = (struct proto_raw_sock*)sk;
 	struct net_device *dev;
+	int err;
 
 	pr_debug("arinc429: Binding ARINC-429 Raw Socket\n");
 
@@ -157,6 +270,15 @@ static int proto_raw_bind(struct socket *sock, struct sockaddr *saddr, int len)
 		return -ENODEV;
 	}
 
+	err = dev_register_socket(dev, raw_ingress, sk);
+	if (err) {
+		pr_err("Failed to register socket with device %s: %d\n",
+		       dev->name, err);
+		dev_put(dev);
+		release_sock(sk);
+		return -ENODEV;
+	}
+
 	psk->ifindex = dev->ifindex;
 	psk->bound = 1;
 
@@ -178,11 +300,20 @@ static int proto_raw_release(struct socket *sock)
 {
 	struct sock *sk = sock->sk;
 	struct proto_raw_sock *psk = (struct proto_raw_sock*)sk;
+	struct net_device *dev = NULL;
 
-	if (!sk)
+	if (!sk) {
 		return 0;
+	}
 
 	pr_debug("arinc429-raw: Releasing ARINC-429 Raw Socket\n");
+
+	dev = dev_get_by_index(sock_net(sk), psk->ifindex);
+	if (dev) {
+		dev_unregister_socket(dev, raw_ingress, sk);
+	} else {
+		pr_warning("arinc429-raw: No device registered with socket\n");
+	}
 
 	lock_sock(sk);
 
@@ -191,6 +322,7 @@ static int proto_raw_release(struct socket *sock)
 
 	sock_orphan(sk);
 	sock->sk = NULL;
+
 
 	release_sock(sk);
 	sock_put(sk);
@@ -213,7 +345,7 @@ static int proto_raw_ioctl(struct socket *sock, unsigned int cmd,
 }
 
 static int proto_raw_getname(struct socket *sock, struct sockaddr *saddr,
-		       int *len, int peer)
+			     int *len, int peer)
 {
 	DECLARE_SOCKADDR(struct sockaddr_arinc429 *, addr, saddr);
 	struct sock *sk = sock->sk;
@@ -506,12 +638,12 @@ static int arinc429_netdev_notifier(struct notifier_block *nb,
 	switch (msg) {
 	case NETDEV_REGISTER:
 		pr_info("arinc429: Registering new ARINC-429 Device.\n");
-		device_add_socket_list(dev);
+		dev_add_socket_list(dev);
 		break;
 
 	case NETDEV_UNREGISTER:
 		pr_info("arinc429: Unregistering ARINC-429 Device.\n");
-		device_remove_socket_list(dev);
+		dev_remove_socket_list(dev);
 		break;
 	}
 
@@ -573,9 +705,18 @@ static __init int arinc429_init(void)
 
 	pr_info("arinc429: Initialising ARINC-429 Socket Driver\n");
 
+	dev_socket_cache = kmem_cache_create("arinc429_dev_socket",
+					     sizeof(struct dev_socket_info),
+					     0, 0, NULL);
+	if (!dev_socket_cache) {
+		pr_err("arinc429: Failed to allocate device socket cache.\n");
+		return -ENOMEM;
+	}
+
 	rc = proto_register(&proto_raw, ARINC429_PROTO_RAW);
 	if (rc) {
 		pr_err("arinc429: Failed to register Raw Protocol: %d\n", rc);
+		kmem_cache_destroy(dev_socket_cache);
 		return rc;
 	}
 
@@ -583,6 +724,7 @@ static __init int arinc429_init(void)
 	if (rc) {
 		pr_err("arinc429: Failed to register Socket Type: %d\n", rc);
 		proto_unregister(&proto_raw);
+		kmem_cache_destroy(dev_socket_cache);
 		return rc;
 	}
 
@@ -591,6 +733,7 @@ static __init int arinc429_init(void)
 		pr_err("arinc429: Failed to register with NetDev: %d\n", rc);
 		sock_unregister(PF_ARINC429);
 		proto_unregister(&proto_raw);
+		kmem_cache_destroy(dev_socket_cache);
 		return rc;
 	}
 
@@ -601,17 +744,18 @@ static __init int arinc429_init(void)
 
 static __exit void arinc429_exit(void)
 {
-	int rc;
+	int err;
 
 	dev_remove_pack(&arinc429_packet_type);
 
-	rc = unregister_netdevice_notifier(&arinc429_notifier_block);
-	if (rc)
-		pr_err("arinc429: Failed to unregister with NetDev: %d\n", rc);
+	err = unregister_netdevice_notifier(&arinc429_notifier_block);
+	if (err) {
+		pr_err("arinc429: Failed to unregister with NetDev: %d\n", err);
+	}
 
 	sock_unregister(PF_ARINC429);
-
 	proto_unregister(&proto_raw);
+	kmem_cache_destroy(dev_socket_cache);
 
 	pr_info("arinc429: Exited ARINC-429 Socket Driver\n");
 }
