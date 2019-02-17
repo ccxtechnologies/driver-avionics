@@ -11,8 +11,8 @@
  * GNU General Public License for more details.
  */
 
-#ifndef __ARINC429_H__
-#define __ARINC429_H__
+#ifndef __AVIONICS_H__
+#define __AVIONICS_H__
 
 #include <linux/types.h>
 #include <linux/socket.h>
@@ -24,48 +24,36 @@
 
 /* should be in include/linux/socket.h, and should have it's own
  * index, not stealing from Ash (which is unused) */
-#ifndef AF_ARINC429
-#define AF_ARINC429	AF_ASH
+#ifndef AF_AVIONICS
+#define AF_AVIONICS	AF_ASH
 #endif
 
 /* should be in include/linux/socket.h, and should have it's own
  * index, not stealing from Ash (which is unused) */
-#ifndef PF_ARINC429
-#define PF_ARINC429	AF_ARINC429
+#ifndef PF_AVIONICS
+#define PF_AVIONICS	AF_AVIONICS
 #endif
 
 /* should be in include/uapi/linux/if_arp.h */
-#ifndef ARPHRD_ARINC429
-#define ARPHRD_ARINC429	281
+#ifndef ARPHRD_AVIONICS
+#define ARPHRD_AVIONICS	281
 #endif
 
 /* should be in include/uapi/linux/if_ether.h */
-#ifndef ETH_P_ARINC429
-#define ETH_P_ARINC429	0x001D
+#ifndef ETH_P_AVIONICS
+#define ETH_P_AVIONICS	0x001D
 #endif
 
 /************************************************************************/
 
-#define ARINC429_PROTO_RAW	1
+#define AVIONICS_PROTO_RAW	1
 
-union arinc429_word {
-	__u32 raw;
-	struct {
-		__u32 label:8;
-		__u32 sdi:2;
-		__u32 data:21;
-		__u32 parity:1;
-	} fmt;
-};
-
-#define ARINC429_WORD_SIZE	(sizeof(union arinc429_word))
-
-struct sockaddr_arinc429 {
-	__kernel_sa_family_t arinc429_family;
-	int arinc429_ifindex;
+struct sockaddr_avionics {
+	__kernel_sa_family_t avionics_family;
+	int ifindex;
 	union {
 		/* reserved for future prototcols */
-	} arinc429_addr;
+	} avionics_addr;
 };
 
-#endif /* __ARINC429_H__ */
+#endif /* __AVIONICS_H__ */

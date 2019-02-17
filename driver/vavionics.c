@@ -21,18 +21,18 @@
 #include <net/rtnetlink.h>
 #include <linux/init.h>
 
-#include "arinc429.h"
+#include "avionics.h"
 
-MODULE_DESCRIPTION("Virtual ARINC-429 Device");
+MODULE_DESCRIPTION("Virtual Avionics Loopback Device");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.0.0");
 
-static void varinc429_rx(struct sk_buff *skb, struct net_device *dev)
+static void vavionics_rx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct net_device_stats *stats = &dev->stats;
 
-	pr_debug("varinc429: Device rx packet\n");
+	pr_debug("vavionics: Device rx packet\n");
 
 	stats->rx_packets++;
 	stats->rx_bytes += skb->len;
@@ -44,21 +44,21 @@ static void varinc429_rx(struct sk_buff *skb, struct net_device *dev)
 	netif_rx_ni(skb);
 }
 
-static netdev_tx_t varinc429_start_xmit(struct sk_buff *skb,
+static netdev_tx_t vavionics_start_xmit(struct sk_buff *skb,
 					struct net_device *dev)
 {
 	struct net_device_stats *stats = &dev->stats;
 	struct sk_buff *skb_rx;
 
-	pr_debug("varinc429: Device tx packet\n");
+	pr_debug("vavionics: Device tx packet\n");
 
-	if (skb->protocol != htons(ETH_P_ARINC429)) {
+	if (skb->protocol != htons(ETH_P_AVIONICS)) {
 	    kfree_skb(skb);
 	    dev->stats.tx_dropped++;
 	    return NETDEV_TX_OK;
 	}
 
-	if (unlikely(skb->len % ARINC429_WORD_SIZE)) {
+	if (unlikely(skb->len % AVIONICS_WORD_SIZE)) {
 	    kfree_skb(skb);
 	    dev->stats.tx_dropped++;
 	    return NETDEV_TX_OK;
@@ -77,75 +77,75 @@ static netdev_tx_t varinc429_start_xmit(struct sk_buff *skb,
 	skb_rx->destructor = sock_efree;
 	skb_rx->sk = skb->sk;
 
-	varinc429_rx(skb, dev);
+	vavionics_rx(skb, dev);
 
 	consume_skb(skb);
 	return NETDEV_TX_OK;
 }
 
-static int varinc429_change_mtu(struct net_device *dev, int mtu)
+static int vavionics_change_mtu(struct net_device *dev, int mtu)
 {
 	if (dev->flags & IFF_UP) {
-		pr_err("varinc429: Can't change MTU when link is up.\n");
+		pr_err("vavionics: Can't change MTU when link is up.\n");
 		return -EBUSY;
 	}
 
-	if (mtu % ARINC429_WORD_SIZE) {
-		pr_err("varinc429: MTU must be a multiple of %ld (word size)\n",
-		       ARINC429_WORD_SIZE);
+	if (mtu % AVIONICS_WORD_SIZE) {
+		pr_err("vavionics: MTU must be a multiple of %ld (word size)\n",
+		       AVIONICS_WORD_SIZE);
 		return -EINVAL;
 	}
 
-	pr_info("varinc429: Setting up device %s MTU to %d\n", dev->name, mtu);
+	pr_info("vavionics: Setting up device %s MTU to %d\n", dev->name, mtu);
 
 	dev->mtu = mtu;
 	return 0;
 }
 
-static const struct net_device_ops varinc429_net_device_ops = {
-	.ndo_start_xmit = varinc429_start_xmit,
-	.ndo_change_mtu = varinc429_change_mtu,
+static const struct net_device_ops vavionics_net_device_ops = {
+	.ndo_start_xmit = vavionics_start_xmit,
+	.ndo_change_mtu = vavionics_change_mtu,
 };
 
-static void varinc429_rtnl_link_setup(struct net_device *dev)
+static void vavionics_rtnl_link_setup(struct net_device *dev)
 {
-	pr_info("varinc429: Setting up Virtial ARINC-429 Device\n");
+	pr_info("vavionics: Setting up device\n");
 
-	dev->type		= ARPHRD_ARINC429;
-	dev->mtu		= ARINC429_WORD_SIZE*32;
+	dev->type		= ARPHRD_AVIONICS;
+	dev->mtu		= AVIONICS_WORD_SIZE*32;
 	dev->hard_header_len	= 0;
 	dev->addr_len		= 0;
 	dev->tx_queue_len	= 0;
 	dev->flags		= IFF_NOARP;
-	dev->netdev_ops		= &varinc429_net_device_ops;
+	dev->netdev_ops		= &vavionics_net_device_ops;
 	dev->destructor		= free_netdev;
 }
 
-static struct rtnl_link_ops varinc429_rtnl_link_ops __read_mostly = {
-	.kind	= "varinc429",
-	.setup	= varinc429_rtnl_link_setup,
+static struct rtnl_link_ops vavionics_rtnl_link_ops __read_mostly = {
+	.kind	= "vavionics",
+	.setup	= vavionics_rtnl_link_setup,
 };
 
-static __init int varinc429_init(void)
+static __init int vavionics_init(void)
 {
 	int rc;
 
-	pr_info("varinc429: Initialising Virtial ARINC-429 Device Driver\n");
+	pr_info("vavionics: Initialisingr\n");
 
-	rc = rtnl_link_register(&varinc429_rtnl_link_ops);
+	rc = rtnl_link_register(&vavionics_rtnl_link_ops);
 	if (rc) {
-		pr_err("varinc429: Failed to register Virtial ARINC-429 Device: %d\n", rc);
+		pr_err("vavionics: Failed to register device: %d\n", rc);
 		return rc;
 	}
 
 	return 0;
 }
 
-static __exit void varinc429_exit(void)
+static __exit void vavionics_exit(void)
 {
-	rtnl_link_unregister(&varinc429_rtnl_link_ops);
-	pr_info("varinc429: Exited Virtial ARINC-429 Device Driver\n");
+	rtnl_link_unregister(&vavionics_rtnl_link_ops);
+	pr_info("vavionics: Exited\n");
 }
 
-module_init(varinc429_init);
-module_exit(varinc429_exit);
+module_init(vavionics_init);
+module_exit(vavionics_exit);

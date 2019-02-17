@@ -10,9 +10,9 @@ import fcntl
 import os
 import errno
 
-AF_ARINC429 = 18
-PF_ARINC429 = 18
-ARINC429_RAW = 1
+AF_AVIONICS = 18
+PF_AVIONICS = 18
+AVIONICS_RAW = 1
 
 SIOCGIFINDEX = 0x8933
 
@@ -33,17 +33,19 @@ def get_addr(sock, channel):
     data = struct.pack("16si", channel.encode(), 0)
     res = fcntl.ioctl(sock, SIOCGIFINDEX, data)
     idx, = struct.unpack("16xi", res)
-    return struct.pack("HiLL", AF_ARINC429, idx, 0, 0)
+    return struct.pack("Hi", AF_AVIONICS, idx)
 
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 
 # == create socket ==
-sock = socket.socket(PF_ARINC429, socket.SOCK_RAW, ARINC429_RAW)
+sock = socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW)
 
 # == bind to interface ==
 # Python doesn't know about PF_ARINC so directly use libc
 addr = get_addr(sock, "varinc0")
-libc.bind(sock.fileno(), addr, len(addr))
+err = libc.bind(sock.fileno(), addr, len(addr))
+if err:
+    raise OSError(err, "Failed to bind to socket")
 
 # == send data example ==
 sent = sock.send(bytes((0x01,0x02,0x03,0x04)))

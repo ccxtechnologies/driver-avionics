@@ -1,7 +1,12 @@
 ccflags-y		+= -D__CHECK_ENDIAN__
 ccflags-y		+= -DDEBUG
 
-obj-m			+= arinc429.o
+obj-m		+= avionics.o
+obj-m		+= proto.o
+obj-m		+= proto-raw.o
+obj-m		+= socket-list.o
+avionics-y	:= avionics.o proto.o proto-raw.o socket-list.o
 
-obj-m			+= varinc429.o
+obj-m		+= vavionics.o
+vavionics-y	:= vavionics.o
 
