@@ -14,5 +14,8 @@
 #ifndef __PROTO_RAW_H__
 #define __PROTO_RAW_H__
 
+const struct proto_ops* proto_raw_get_ops(void);
+struct proto* proto_raw_get(void);
+
 
 #endif /* __PROTO_RAW_H__ */

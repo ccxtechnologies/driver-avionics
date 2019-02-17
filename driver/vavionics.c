@@ -58,7 +58,7 @@ static netdev_tx_t vavionics_start_xmit(struct sk_buff *skb,
 	    return NETDEV_TX_OK;
 	}
 
-	if (unlikely(skb->len % AVIONICS_WORD_SIZE)) {
+	if (unlikely(skb->len % sizeof(__u32))) {
 	    kfree_skb(skb);
 	    dev->stats.tx_dropped++;
 	    return NETDEV_TX_OK;
@@ -90,9 +90,8 @@ static int vavionics_change_mtu(struct net_device *dev, int mtu)
 		return -EBUSY;
 	}
 
-	if (mtu % AVIONICS_WORD_SIZE) {
-		pr_err("vavionics: MTU must be a multiple of %ld (word size)\n",
-		       AVIONICS_WORD_SIZE);
+	if (mtu % sizeof(__u32)) {
+		pr_err("vavionics: MTU must be a multiple of 4 bytes.\n");
 		return -EINVAL;
 	}
 
@@ -112,7 +111,7 @@ static void vavionics_rtnl_link_setup(struct net_device *dev)
 	pr_info("vavionics: Setting up device\n");
 
 	dev->type		= ARPHRD_AVIONICS;
-	dev->mtu		= AVIONICS_WORD_SIZE*32;
+	dev->mtu		= sizeof(__u32)*32;
 	dev->hard_header_len	= 0;
 	dev->addr_len		= 0;
 	dev->tx_queue_len	= 0;

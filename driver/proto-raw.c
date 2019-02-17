@@ -165,12 +165,12 @@ static struct proto proto_raw = {
 	.obj_size	= sizeof(struct proto_raw_sock),
 };
 
-static const struct proto_ops* proto_raw_get_ops(void)
+const struct proto_ops* proto_raw_get_ops(void)
 {
 	return &proto_raw_ops;
 }
 
-static struct proto* proto_raw_get(void)
+struct proto* proto_raw_get(void)
 {
 	return &proto_raw;
 }
