@@ -1,5 +1,7 @@
-# driver-arinc429
-Socket based ARINC-429 Driver for Linux
+# driver-avionics
+Socket based Avionics Networking Driver for Linux
+
+Includes ARINC-429 interfaces, but can be expanded to include new protocols like ARINC-717, MIL-1553, etc.
 
 ## Notes on Kernel Header Files
 
