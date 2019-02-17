@@ -17,5 +17,7 @@
 const struct proto_ops* proto_raw_get_ops(void);
 struct proto* proto_raw_get(void);
 
+int proto_raw_register(void);
+void proto_raw_unregister(void);
 
 #endif /* __PROTO_RAW_H__ */

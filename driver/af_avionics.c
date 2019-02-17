@@ -24,6 +24,7 @@
 #include <linux/init.h>
 
 #include "proto-raw.h"
+#include "socket-list.h"
 #include "avionics.h"
 
 MODULE_DESCRIPTION("AVIONICS Socket Driver");
@@ -130,11 +131,9 @@ static struct notifier_block avionics_notifier_block __read_mostly = {
 };
 
 static int avionics_packet_rx(struct sk_buff *skb, struct net_device *dev,
-				   struct packet_type *pt,
-				   struct net_device *orig_dev)
+			      struct packet_type *pt,
+			      struct net_device *orig_dev)
 {
-	int err;
-
 	if (unlikely(!net_eq(dev_net(dev), &init_net))) {
 		pr_err("avionics: device not in namespace\n");
 		kfree_skb(skb);
@@ -189,7 +188,7 @@ static __init int avionics_init(void)
 	rc = sock_register(&avionics_net_proto_family);
 	if (rc) {
 		pr_err("avionics: Failed to register Socket Type: %d\n", rc);
-		proto_unregister(&proto_raw);
+		proto_raw_unregister();
 		socket_list_exit();
 		return rc;
 	}
@@ -198,7 +197,7 @@ static __init int avionics_init(void)
 	if (rc) {
 		pr_err("avionics: Failed to register with NetDev: %d\n", rc);
 		sock_unregister(PF_AVIONICS);
-		proto_unregister(&proto_raw);
+		proto_raw_unregister();
 		socket_list_exit();
 		return rc;
 	}

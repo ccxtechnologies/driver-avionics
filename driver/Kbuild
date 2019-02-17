@@ -2,7 +2,7 @@ ccflags-y		+= -D__CHECK_ENDIAN__
 ccflags-y		+= -DDEBUG
 
 obj-m		+= avionics.o
-avionics-y	:= proto.o proto-raw.o socket-list.o
+avionics-y	:= af_avionics.o proto.o proto-raw.o socket-list.o
 
 obj-m		+= vavionics.o
 
