@@ -16,6 +16,8 @@ AVIONICS_RAW = 1
 
 SIOCGIFINDEX = 0x8933
 
+device = "vavionics0"
+
 def error_code_to_str(code):
     try:
         name = errno.errorcode[code]
@@ -42,7 +44,7 @@ sock = socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW)
 
 # == bind to interface ==
 # Python doesn't know about PF_ARINC so directly use libc
-addr = get_addr(sock, "varinc0")
+addr = get_addr(sock, "device")
 err = libc.bind(sock.fileno(), addr, len(addr))
 if err:
     raise OSError(err, "Failed to bind to socket")

@@ -28,6 +28,8 @@ int socket_list_add_socket(struct net_device *dev,
 void socket_list_remove(struct net_device *dev);
 int socket_list_add(struct net_device *dev);
 
+int socket_list_rx_funcs(struct net_device *dev, struct sk_buff *skb);
+
 void socket_list_exit(void);
 int socket_list_init(void);
 

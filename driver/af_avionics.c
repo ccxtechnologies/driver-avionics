@@ -134,6 +134,8 @@ static int avionics_packet_rx(struct sk_buff *skb, struct net_device *dev,
 			      struct packet_type *pt,
 			      struct net_device *orig_dev)
 {
+	int err;
+
 	if (unlikely(!net_eq(dev_net(dev), &init_net))) {
 		pr_err("avionics: device not in namespace\n");
 		kfree_skb(skb);
@@ -147,17 +149,15 @@ static int avionics_packet_rx(struct sk_buff *skb, struct net_device *dev,
 		return NET_RX_DROP;
 	}
 
-	pr_debug("avionics: Locking RCU.\n");
-	rcu_read_lock();
+	err = socket_list_rx_funcs(dev, skb);
+	if (err) {
+		pr_err("avionics: Failed to call protocol rx functions: %d\n",
+		       err);
+		consume_skb(skb);
+		return NET_RX_DROP;
+	}
 
-	/* TODO: Process incoming packet */
-
-	pr_debug("avionics: Unlocking RCU.\n");
-	rcu_read_unlock();
-
-	pr_debug("avionics: Consuming skb.\n");
 	consume_skb(skb);
-
 	return NET_RX_SUCCESS;
 }
 

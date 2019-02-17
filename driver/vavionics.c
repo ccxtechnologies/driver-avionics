@@ -68,12 +68,12 @@ static netdev_tx_t vavionics_start_xmit(struct sk_buff *skb,
 	stats->tx_bytes += skb->len;
 
 	skb_rx = skb_clone(skb, GFP_ATOMIC);
-	if (!skb) {
+	if (!skb_rx) {
 		dev->stats.rx_dropped++;
 		return NETDEV_TX_OK;
 	}
 
-	sock_hold(skb->sk);
+	sock_hold(skb_rx->sk);
 	skb_rx->destructor = sock_efree;
 	skb_rx->sk = skb->sk;
 

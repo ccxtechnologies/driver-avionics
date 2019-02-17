@@ -13,6 +13,8 @@ AVIONICS_RAW = 1
 
 SIOCGIFINDEX = 0x8933
 
+device = "vavionics0"
+
 def get_addr(sock, channel):
     data = struct.pack("16si", channel.encode(), 0)
     res = fcntl.ioctl(sock, SIOCGIFINDEX, data)
@@ -26,7 +28,7 @@ sock = socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW)
 
 # == bind to interface ==
 # Python doesn't know about PF_ARINC so directly use libc
-addr = get_addr(sock, "varinc0")
+addr = get_addr(sock, device)
 err = libc.bind(sock.fileno(), addr, len(addr))
 
 if err:

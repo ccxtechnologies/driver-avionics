@@ -38,6 +38,38 @@ struct socket_list {
 static DEFINE_SPINLOCK(socket_list_lock);
 static struct kmem_cache *socket_list_cache __read_mostly;
 
+int socket_list_rx_funcs(struct net_device *dev, struct sk_buff *skb)
+{
+	struct socket_list *sk_list;
+	struct socket_info *sk_info;
+
+	if (!dev) {
+		pr_err("socket-list: Not a valid device.\n");
+		return -ENODEV;
+	}
+
+	if (dev->type != ARPHRD_AVIONICS) {
+		pr_err("socket-list: %s is not a valid device.\n", dev->name);
+		return -ENODEV;
+	}
+
+	if (!dev->ml_priv) {
+		pr_err("socket-list: %s has no registerd socket list.\n",
+		       dev->name);
+		return -ENODEV;
+	}
+
+	sk_list = (struct socket_list *)dev->ml_priv;
+
+	rcu_read_lock();
+	hlist_for_each_entry_rcu(sk_info, &sk_list->head, node) {
+		sk_info->rx_func(skb, sk_info->sk);
+	}
+	rcu_read_unlock();
+
+	return 0;
+}
+
 void socket_list_remove_socket(struct net_device *dev,
 			 void (*rx_func)(struct sk_buff *, struct sock *),
 			 struct sock *sk)
