@@ -92,10 +92,35 @@ int proto_get_dev_from_msg(struct proto_sock *psk,
 	return 0;
 }
 
-struct sk_buff* proto_alloc_send_skb(struct net_device *dev,
-					 int flags,
-					 struct sock *sk,
-					 size_t size)
+struct sk_buff* avionics_alloc_skb(struct net_device *dev, unsigned int size)
+{
+	struct sk_buff *skb;
+
+	skb = alloc_skb(size + sizeof(struct proto_skb_priv), GFP_KERNEL);
+	if (!skb) {
+		pr_err("avionics-proto: Unable to allocate skbuff\n");
+		return NULL;
+	}
+
+	skb_reserve(skb, sizeof(struct proto_skb_priv));
+	((struct proto_skb_priv *)(skb->head))->ifindex = dev->ifindex;
+
+	skb->dev = dev;
+	skb->len = size;
+	skb->protocol = htons(ETH_P_AVIONICS);
+	skb->ip_summed = CHECKSUM_UNNECESSARY;
+	skb->pkt_type = PACKET_HOST;
+
+	skb_reset_mac_header(skb);
+	skb_reset_network_header(skb);
+	skb_reset_transport_header(skb);
+
+	return skb;
+}
+EXPORT_SYMBOL(avionics_alloc_skb);
+
+struct sk_buff* proto_alloc_send_skb(struct net_device *dev, int flags,
+				     struct sock *sk, size_t size)
 {
 	struct sk_buff *skb;
 	int err;
@@ -199,6 +224,7 @@ int proto_release(struct socket *sock,
 	} else {
 		pr_warning("proto: No device registered with socket\n");
 	}
+	dev_put(dev);
 
 	lock_sock(sk);
 

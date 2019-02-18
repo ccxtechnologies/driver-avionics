@@ -44,7 +44,7 @@ sock = socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW)
 
 # == bind to interface ==
 # Python doesn't know about PF_ARINC so directly use libc
-addr = get_addr(sock, "device")
+addr = get_addr(sock, device)
 err = libc.bind(sock.fileno(), addr, len(addr))
 if err:
     raise OSError(err, "Failed to bind to socket")

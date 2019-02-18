@@ -170,7 +170,7 @@ static __init int avionics_init(void)
 {
 	int rc;
 
-	pr_info("avionics: Initialising AVIONICS Socket Driver\n");
+	pr_info("avionics: Initializing Driver\n");
 
 	rc = socket_list_init();
 	if (rc) {
@@ -223,7 +223,7 @@ static __exit void avionics_exit(void)
 
 	socket_list_exit();
 
-	pr_info("avionics: Exited AVIONICS Socket Driver\n");
+	pr_info("avionics: Exited Driver\n");
 }
 
 module_init(avionics_init);

@@ -19,6 +19,7 @@
 #include <linux/netdevice.h>
 #include <net/sock.h>
 #include <net/rtnetlink.h>
+#include <linux/skbuff.h>
 #include <linux/init.h>
 
 #include "avionics.h"
@@ -28,18 +29,24 @@ MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.0.0");
 
-static void vavionics_rx(struct sk_buff *skb, struct net_device *dev)
+static void vavionics_rx(struct sk_buff *skb_xmit, struct net_device *dev)
 {
+	struct sk_buff *skb;
 	struct net_device_stats *stats = &dev->stats;
+	int i;
 
-	pr_debug("vavionics: Device rx packet\n");
+	pr_debug("vavionics: RX Packet\n");
+
+	skb = avionics_alloc_skb(dev, skb_xmit->len) ;
+	if (!skb) {
+		pr_err("vavionics: Failed ot allocate RX buffer\n");
+		return;
+	}
+
+	skb_copy_to_linear_data(skb, skb_xmit->data, skb_xmit->len);
 
 	stats->rx_packets++;
 	stats->rx_bytes += skb->len;
-
-	skb->pkt_type  = PACKET_BROADCAST;
-	skb->dev       = dev;
-	skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 	netif_rx_ni(skb);
 }
@@ -47,10 +54,11 @@ static void vavionics_rx(struct sk_buff *skb, struct net_device *dev)
 static netdev_tx_t vavionics_start_xmit(struct sk_buff *skb,
 					struct net_device *dev)
 {
-	struct net_device_stats *stats = &dev->stats;
-	struct sk_buff *skb_rx;
+	int i;
 
-	pr_debug("vavionics: Device tx packet\n");
+	struct net_device_stats *stats = &dev->stats;
+
+	pr_debug("vavionics: TX Packet\n");
 
 	if (skb->protocol != htons(ETH_P_AVIONICS)) {
 	    kfree_skb(skb);
@@ -66,16 +74,6 @@ static netdev_tx_t vavionics_start_xmit(struct sk_buff *skb,
 
 	stats->tx_packets++;
 	stats->tx_bytes += skb->len;
-
-	skb_rx = skb_clone(skb, GFP_ATOMIC);
-	if (!skb_rx) {
-		dev->stats.rx_dropped++;
-		return NETDEV_TX_OK;
-	}
-
-	sock_hold(skb_rx->sk);
-	skb_rx->destructor = sock_efree;
-	skb_rx->sk = skb->sk;
 
 	vavionics_rx(skb, dev);
 
@@ -129,7 +127,7 @@ static __init int vavionics_init(void)
 {
 	int rc;
 
-	pr_info("vavionics: Initialisingr\n");
+	pr_info("vavionics: Initialising Driver\n");
 
 	rc = rtnl_link_register(&vavionics_rtnl_link_ops);
 	if (rc) {
@@ -143,7 +141,7 @@ static __init int vavionics_init(void)
 static __exit void vavionics_exit(void)
 {
 	rtnl_link_unregister(&vavionics_rtnl_link_ops);
-	pr_info("vavionics: Exited\n");
+	pr_info("vavionics: Exited Driver\n");
 }
 
 module_init(vavionics_init);

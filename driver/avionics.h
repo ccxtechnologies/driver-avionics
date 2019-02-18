@@ -56,4 +56,6 @@ struct sockaddr_avionics {
 	} avionics_addr;
 };
 
+struct sk_buff* avionics_alloc_skb(struct net_device *dev, unsigned int size);
+
 #endif /* __AVIONICS_H__ */

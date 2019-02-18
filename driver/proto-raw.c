@@ -53,8 +53,7 @@ static int proto_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 		return err;
 	}
 
-	skb = proto_alloc_send_skb(dev, msg->msg_flags & MSG_DONTWAIT,
-					    sk, size);
+	skb = proto_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT, sk, size);
 
 	if (!skb) {
 		pr_err("proto-raw: Unable to allocate skbuff\n");
