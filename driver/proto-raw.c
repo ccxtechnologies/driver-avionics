@@ -26,15 +26,6 @@
 
 /* ====== Raw Protocol ===== */
 
-struct proto_raw_sock {
-	struct proto_sock sk; /* must be first */
-};
-
-static void proto_raw_rx(struct sk_buff *skb, struct sock *sk)
-{
-	pr_info("proto-raw: Raw ingress\n");
-}
-
 static int proto_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 			     size_t size)
 {
@@ -123,16 +114,6 @@ static int proto_raw_recvmsg(struct socket *sock,
 	return size;
 }
 
-static int proto_raw_release(struct socket *sock)
-{
-	return proto_release(sock, proto_raw_rx);
-}
-
-static int proto_raw_bind(struct socket *sock, struct sockaddr *saddr, int len)
-{
-	return proto_bind(sock, saddr, len, proto_raw_rx);
-}
-
 static const struct proto_ops proto_raw_ops = {
 	.owner		= THIS_MODULE,
 	.family		= PF_AVIONICS,
@@ -151,9 +132,9 @@ static const struct proto_ops proto_raw_ops = {
 
 	.sendmsg	= proto_raw_sendmsg,
 	.recvmsg	= proto_raw_recvmsg,
-	.bind		= proto_raw_bind,
-	.release	= proto_raw_release,
 
+	.bind		= proto_bind,
+	.release	= proto_release,
 	.getname	= proto_getname,
 	.ioctl		= proto_ioctl,
 };
@@ -161,7 +142,7 @@ static const struct proto_ops proto_raw_ops = {
 static struct proto proto_raw = {
 	.name		= "AVIONICS_RAW",
 	.owner		= THIS_MODULE,
-	.obj_size	= sizeof(struct proto_raw_sock),
+	.obj_size	= sizeof(struct proto_sock),
 };
 
 const struct proto_ops* proto_raw_get_ops(void)

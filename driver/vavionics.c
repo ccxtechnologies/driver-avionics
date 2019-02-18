@@ -33,7 +33,6 @@ static void vavionics_rx(struct sk_buff *skb_xmit, struct net_device *dev)
 {
 	struct sk_buff *skb;
 	struct net_device_stats *stats = &dev->stats;
-	int i;
 
 	pr_debug("vavionics: RX Packet\n");
 
@@ -54,8 +53,6 @@ static void vavionics_rx(struct sk_buff *skb_xmit, struct net_device *dev)
 static netdev_tx_t vavionics_start_xmit(struct sk_buff *skb,
 					struct net_device *dev)
 {
-	int i;
-
 	struct net_device_stats *stats = &dev->stats;
 
 	pr_debug("vavionics: TX Packet\n");

@@ -34,9 +34,7 @@ int proto_send_to_netdev(struct net_device *dev, struct sk_buff *skb);
 int proto_getname(struct socket *sock, struct sockaddr *saddr,
 		  int *len, int peer);
 int proto_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);
-int proto_release(struct socket *sock,
-		  void (*rx_func)(struct sk_buff*, struct sock *));
-int proto_bind(struct socket *sock, struct sockaddr *saddr, int len,
-	       void (*rx_func)(struct sk_buff*, struct sock *));
+int proto_release(struct socket *sock);
+int proto_bind(struct socket *sock, struct sockaddr *saddr, int len);
 
 #endif /* __AVIONICS_H__ */

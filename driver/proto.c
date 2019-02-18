@@ -205,8 +205,33 @@ int proto_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 	}
 }
 
-int proto_release(struct socket *sock,
-		  void (*rx_func)(struct sk_buff*, struct sock *))
+static void proto_rx(struct sk_buff *oskb, struct sock *sk)
+{
+	struct sk_buff *skb;
+	struct sockaddr_avionics *addr;
+
+	pr_info("proto: Ingress packet\n");
+
+	/* clone the given skb to be able to enqueue it into the rcv queue */
+	skb = skb_clone(oskb, GFP_ATOMIC);
+	if (!skb) {
+		pr_err("proto: Failed to allocate sk buffer clone,\n");
+		return;
+	}
+
+	sock_skb_cb_check_size(sizeof(struct sockaddr_avionics));
+	addr = (struct sockaddr_avionics *)skb->cb;
+	memset(addr, 0, sizeof(*addr));
+	addr->avionics_family  = AF_AVIONICS;
+	addr->ifindex = skb->dev->ifindex;
+
+	if (sock_queue_rcv_skb(sk, skb) < 0) {
+		pr_err("proto: Failed to queue received message.\n");
+		kfree_skb(skb);
+	}
+}
+
+int proto_release(struct socket *sock)
 {
 	struct sock *sk = sock->sk;
 	struct proto_sock *psk = (struct proto_sock*)sk;
@@ -220,7 +245,7 @@ int proto_release(struct socket *sock,
 
 	dev = dev_get_by_index(sock_net(sk), psk->ifindex);
 	if (dev) {
-		socket_list_remove_socket(dev, rx_func, sk);
+		socket_list_remove_socket(dev, proto_rx, sk);
 	} else {
 		pr_warning("proto: No device registered with socket\n");
 	}
@@ -241,8 +266,7 @@ int proto_release(struct socket *sock,
 	return 0;
 }
 
-int proto_bind(struct socket *sock, struct sockaddr *saddr, int len,
-		  void (*rx_func)(struct sk_buff*, struct sock *))
+int proto_bind(struct socket *sock, struct sockaddr *saddr, int len)
 {
 	DECLARE_SOCKADDR(struct sockaddr_avionics *, addr, saddr);
 	struct sock *sk = sock->sk;
@@ -289,7 +313,7 @@ int proto_bind(struct socket *sock, struct sockaddr *saddr, int len,
 		return -ENODEV;
 	}
 
-	err = socket_list_add_socket(dev, rx_func, sk);
+	err = socket_list_add_socket(dev, proto_rx, sk);
 	if (err) {
 		pr_err("proto: Failed to register socket with device %s: %d\n",
 		       dev->name, err);
