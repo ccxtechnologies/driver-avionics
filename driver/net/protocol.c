@@ -24,10 +24,42 @@
 #include "socket-list.h"
 #include "avionics.h"
 
-struct protocol_skb_priv {
-	int ifindex;
-	__u8 data[0];
-};
+void protocol_init_skb(struct net_device *dev, struct sk_buff *skb)
+{
+	skb->dev = dev;
+	skb->protocol = htons(ETH_P_AVIONICS);
+	skb->ip_summed = CHECKSUM_UNNECESSARY;
+	skb->pkt_type = PACKET_HOST;
+
+	skb_reset_mac_header(skb);
+	skb_reset_network_header(skb);
+	skb_reset_transport_header(skb);
+}
+
+struct sk_buff* protocol_alloc_send_skb(struct net_device *dev,
+					int flags, struct sock *sk,
+					size_t size)
+{
+	struct sk_buff *skb;
+	int err;
+
+	skb = sock_alloc_send_skb(sk, size, flags, &err);
+	if (!skb) {
+		pr_err("avionics-device: Unable to allocate send skbuff: %d.\n",
+		       err);
+		return NULL;
+	}
+
+	protocol_init_skb(dev, skb);
+
+	sock_tx_timestamp(sk, sk->sk_tsflags, &skb_shinfo(skb)->tx_flags);
+
+	skb->sk  = sk;
+	skb->priority = sk->sk_priority;
+
+	return skb;
+}
+
 
 int protocol_get_dev_from_msg(struct protocol_sock *psk,
 			      struct msghdr *msg, size_t size,
@@ -89,65 +121,6 @@ int protocol_get_dev_from_msg(struct protocol_sock *psk,
 	return 0;
 }
 
-struct sk_buff* protocol_alloc_skb(struct net_device *dev, unsigned int size)
-{
-	struct sk_buff *skb;
-
-	skb = alloc_skb(size + sizeof(struct protocol_skb_priv), GFP_KERNEL);
-	if (!skb) {
-		pr_err("avionics-protocol: Unable to allocate skbuff\n");
-		return NULL;
-	}
-
-	skb_reserve(skb, sizeof(struct protocol_skb_priv));
-	((struct protocol_skb_priv *)(skb->head))->ifindex = dev->ifindex;
-
-	skb->dev = dev;
-	skb->len = size;
-	skb->protocol = htons(ETH_P_AVIONICS);
-	skb->ip_summed = CHECKSUM_UNNECESSARY;
-	skb->pkt_type = PACKET_HOST;
-
-	skb_reset_mac_header(skb);
-	skb_reset_network_header(skb);
-	skb_reset_transport_header(skb);
-
-	return skb;
-}
-
-struct sk_buff* protocol_alloc_send_skb(struct net_device *dev, int flags,
-					struct sock *sk, size_t size)
-{
-	struct sk_buff *skb;
-	int err;
-
-	skb = sock_alloc_send_skb(sk, size + sizeof(struct protocol_skb_priv),
-				  flags, &err);
-
-	if (!skb) {
-		pr_err("avionics-protocol: Unable to allocate skbuff: %d.\n",
-		       err);
-		return NULL;
-	}
-
-	skb_reserve(skb, sizeof(struct protocol_skb_priv));
-	((struct protocol_skb_priv *)(skb->head))->ifindex = dev->ifindex;
-
-	sock_tx_timestamp(sk, sk->sk_tsflags, &skb_shinfo(skb)->tx_flags);
-
-	skb->dev = dev;
-	skb->sk  = sk;
-	skb->priority = sk->sk_priority;
-	skb->protocol = htons(ETH_P_AVIONICS);
-	skb->ip_summed = CHECKSUM_UNNECESSARY;
-	skb->pkt_type = PACKET_HOST;
-
-	skb_reset_mac_header(skb);
-	skb_reset_network_header(skb);
-	skb_reset_transport_header(skb);
-
-	return skb;
-}
 
 int protocol_send_to_netdev(struct net_device *dev, struct sk_buff *skb)
 {
@@ -207,8 +180,6 @@ static void protocol_rx(struct sk_buff *oskb, struct sock *sk)
 {
 	struct sk_buff *skb;
 	struct sockaddr_avionics *addr;
-
-	pr_info("avionics-protocol: Ingress packet\n");
 
 	/* clone the given skb to be able to enqueue it into the rcv queue */
 	skb = skb_clone(oskb, GFP_ATOMIC);

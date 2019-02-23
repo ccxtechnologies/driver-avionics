@@ -14,13 +14,7 @@
 #ifndef __AVIONICS_DEVICE_H__
 #define __AVIONICS_DEVICE_H__
 
-#include <linux/netdevice.h>
-#include <linux/skbuff.h>
-
-struct sk_buff* avionics_device_alloc_skb(struct net_device *dev,
-					  unsigned int size);
-
-int avionics_device_register(struct net_device *dev);
-void avionics_device_unregister(struct net_device *dev);
+int device_netlink_register(void);
+void device_netlink_unregister(void);
 
 #endif /* __AVIONICS_DEVICE_H__ */

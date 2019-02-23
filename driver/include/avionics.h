@@ -46,6 +46,9 @@
 
 /************************************************************************/
 
+
+/* ================= Defintions for Socket Interface =================== */
+
 #define AVIONICS_PROTO_RAW	1
 
 struct sockaddr_avionics {
@@ -56,6 +59,19 @@ struct sockaddr_avionics {
 	} avionics_addr;
 };
 
-struct sk_buff* avionics_alloc_skb(struct net_device *dev, unsigned int size);
+/* ============= Defintions for Netlink (RNTL) Interface =============== */
+
+struct avionics_rate {
+	__u32 rx_rate_hz;
+	__u32 tx_rate_hz;
+};
+
+enum {
+	IFLA_AVIONICS_UNSPEC,
+	IFLA_AVIONICS_RATE,
+	__IFLA_AVIONICS_MAX
+};
+
+#define IFLA_AVIONICS_MAX	(__IFLA_AVIONICS_MAX - 1)
 
 #endif /* __AVIONICS_H__ */

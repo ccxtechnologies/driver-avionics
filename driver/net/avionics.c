@@ -26,6 +26,7 @@
 #include "protocol-raw.h"
 #include "socket-list.h"
 #include "avionics.h"
+#include "device.h"
 
 MODULE_DESCRIPTION("Avionics Networking Driver");
 MODULE_LICENSE("GPL v2");
@@ -175,9 +176,17 @@ static __init int avionics_init(void)
 		return rc;
 	}
 
+	rc = device_netlink_register();
+	if (rc) {
+		pr_err("avionics: Failed to register device netlink: %d\n", rc);
+		socket_list_exit();
+		return rc;
+	}
+
 	rc = protocol_raw_register();
 	if (rc) {
 		pr_err("avionics: Failed to register raw protocol: %d\n", rc);
+		device_netlink_unregister();
 		socket_list_exit();
 		return rc;
 	}
@@ -185,6 +194,7 @@ static __init int avionics_init(void)
 	rc = sock_register(&avionics_net_proto_family);
 	if (rc) {
 		pr_err("avionics: Failed to register socket type: %d\n", rc);
+		device_netlink_unregister();
 		protocol_raw_unregister();
 		socket_list_exit();
 		return rc;
@@ -193,6 +203,7 @@ static __init int avionics_init(void)
 	rc = register_netdevice_notifier(&avionics_notifier_block);
 	if (rc) {
 		pr_err("avionics: Failed to register with NetDev: %d\n", rc);
+		device_netlink_unregister();
 		sock_unregister(PF_AVIONICS);
 		protocol_raw_unregister();
 		socket_list_exit();
@@ -216,6 +227,8 @@ static __exit void avionics_exit(void)
 	}
 
 	sock_unregister(PF_AVIONICS);
+
+	device_netlink_unregister();
 	protocol_raw_unregister();
 
 	socket_list_exit();

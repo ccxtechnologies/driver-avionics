@@ -104,8 +104,6 @@ static const struct net_device_ops vavionics_net_device_ops = {
 
 static void vavionics_rtnl_link_setup(struct net_device *dev)
 {
-	pr_info("vavionics: Setting up device\n");
-
 	dev->type		= ARPHRD_AVIONICS;
 	dev->mtu		= sizeof(__u32)*32;
 	dev->hard_header_len	= 0;
