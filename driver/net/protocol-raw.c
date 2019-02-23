@@ -20,71 +20,70 @@
 #include <linux/skbuff.h>
 #include <net/sock.h>
 
-#include "proto-raw.h"
-#include "proto.h"
+#include "protocol-raw.h"
+#include "protocol.h"
 #include "avionics.h"
 
 /* ====== Raw Protocol ===== */
 
-static int proto_raw_sendmsg(struct socket *sock, struct msghdr *msg,
-			     size_t size)
+static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
+				size_t size)
 {
 	struct sock *sk = sock->sk;
-	struct proto_raw_sock *psk = (struct proto_raw_sock*)sk;
+	struct protocol_raw_sock *psk = (struct protocol_raw_sock*)sk;
 	struct sk_buff *skb;
 	struct net_device *dev;
 	int err;
 
-	pr_debug("proto-raw: Sending a Raw message\n");
-
-	err = proto_get_dev_from_msg((struct proto_sock*)psk,
-				     msg, size, &dev);
+	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
+					msg, size, &dev);
 	if (err) {
-		pr_err("proto-raw: Can't find device: %d.\n", err);
+		pr_err("avionics-protocol-raw: Can't find device: %d.\n", err);
 		return err;
 	}
 
-	skb = proto_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT, sk, size);
+	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT,
+				      sk, size);
 
 	if (!skb) {
-		pr_err("proto-raw: Unable to allocate skbuff\n");
+		pr_err("avionics-protocol-raw: Unable to allocate skbuff\n");
 		dev_put(dev);
 		return -ENOMEM;
 	}
 
 	err = memcpy_from_msg(skb_put(skb, size), msg, size);
 	if (err < 0) {
-		pr_err("proto-raw: Unable to memcpy from mesg: %d.\n", err);
+		pr_err("avionics-protocol-raw: Can't memcpy from msg: %d.\n",
+		       err);
 		kfree_skb(skb);
 		dev_put(dev);
 		return err;
 	}
 
-	err = proto_send_to_netdev(dev, skb);
+	err = protocol_send_to_netdev(dev, skb);
 	if (err) {
-		pr_err("proto-raw: Failed to send packet: %d.\n", err);
+		pr_err("avionics-protocol-raw: Failed to send packet: %d.\n",
+		       err);
 		return err;
 	}
 
 	return size;
 }
 
-static int proto_raw_recvmsg(struct socket *sock,
-			     struct msghdr *msg, size_t size, int flags)
+static int protocol_raw_recvmsg(struct socket *sock,
+				struct msghdr *msg, size_t size, int flags)
 {
 	struct sock *sk = sock->sk;
 	struct sk_buff *skb;
 	int err = 0;
 	int noblock;
 
-	pr_debug("proto-raw: Receiving message\n");
-
 	noblock = flags & MSG_DONTWAIT;
 	flags &= ~MSG_DONTWAIT;
 
 	skb = skb_recv_datagram(sk, flags, noblock, &err);
 	if (!skb) {
-		pr_debug("proto-raw: No data in receive message\n");
+		pr_debug("avionics-protocol-raw: No data in receive message\n");
 		return err;
 	}
 
@@ -96,7 +95,7 @@ static int proto_raw_recvmsg(struct socket *sock,
 
 	err = memcpy_to_msg(msg, skb->data, size);
 	if (err < 0) {
-		pr_err("proto-raw: Failed to copy message data.\n");
+		pr_err("avionics-protocol-raw: Failed to copy message data.\n");
 		skb_free_datagram(sk, skb);
 		return err;
 	}
@@ -114,7 +113,7 @@ static int proto_raw_recvmsg(struct socket *sock,
 	return size;
 }
 
-static const struct proto_ops proto_raw_ops = {
+static const struct proto_ops protocol_raw_ops = {
 	.owner		= THIS_MODULE,
 	.family		= PF_AVIONICS,
 
@@ -130,44 +129,45 @@ static const struct proto_ops proto_raw_ops = {
 
 	.poll		= datagram_poll,
 
-	.sendmsg	= proto_raw_sendmsg,
-	.recvmsg	= proto_raw_recvmsg,
+	.sendmsg	= protocol_raw_sendmsg,
+	.recvmsg	= protocol_raw_recvmsg,
 
-	.bind		= proto_bind,
-	.release	= proto_release,
-	.getname	= proto_getname,
-	.ioctl		= proto_ioctl,
+	.bind		= protocol_bind,
+	.release	= protocol_release,
+	.getname	= protocol_getname,
+	.ioctl		= protocol_ioctl,
 };
 
-static struct proto proto_raw = {
+static struct proto protocol_raw = {
 	.name		= "AVIONICS_RAW",
 	.owner		= THIS_MODULE,
-	.obj_size	= sizeof(struct proto_sock),
+	.obj_size	= sizeof(struct protocol_sock),
 };
 
-const struct proto_ops* proto_raw_get_ops(void)
+const struct proto_ops* protocol_raw_get_ops(void)
 {
-	return &proto_raw_ops;
+	return &protocol_raw_ops;
 }
 
-struct proto* proto_raw_get(void)
+struct proto * protocol_raw_get(void)
 {
-	return &proto_raw;
+	return &protocol_raw;
 }
 
-int proto_raw_register(void)
+int protocol_raw_register(void)
 {
 	int err;
 
-	err = proto_register(&proto_raw, AVIONICS_PROTO_RAW);
+	err = proto_register(&protocol_raw, AVIONICS_PROTO_RAW);
 	if (err) {
-		pr_err("proto-raw: Failed to register Raw Protocol: %d\n", err);
+		pr_err("avionics-protocol-raw: Failed to register"
+		       " Raw Protocol: %d\n", err);
 		return err;
 	}
 	return 0;
 }
 
-void proto_raw_unregister(void)
+void protocol_raw_unregister(void)
 {
-	proto_unregister(&proto_raw);
+	proto_unregister(&protocol_raw);
 }

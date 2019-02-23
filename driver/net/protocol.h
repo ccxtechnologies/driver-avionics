@@ -11,30 +11,30 @@
  * GNU General Public License for more details.
  */
 
-#ifndef __PROTO_H__
-#define __PROTO_H__
+#ifndef __AVIONICS_PROTOCOL_H__
+#define __AVIONICS_PROTOCOL_H__
 
 #include <net/sock.h>
 
-struct proto_sock {
+struct protocol_sock {
 	struct sock sk; /* must be first */
 	int ifindex;
 	int bound;
 };
 
-int proto_get_dev_from_msg(struct proto_sock *psk,
+int protocol_get_dev_from_msg(struct protocol_sock *psk,
 			   struct msghdr *msg, size_t size,
 			   struct net_device **dev);
-struct sk_buff* proto_alloc_send_skb(struct net_device *dev,
+struct sk_buff* protocol_alloc_send_skb(struct net_device *dev,
 					 int flags,
 					 struct sock *sk,
 					 size_t size);
-int proto_send_to_netdev(struct net_device *dev, struct sk_buff *skb);
+int protocol_send_to_netdev(struct net_device *dev, struct sk_buff *skb);
 
-int proto_getname(struct socket *sock, struct sockaddr *saddr,
+int protocol_getname(struct socket *sock, struct sockaddr *saddr,
 		  int *len, int peer);
-int proto_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);
-int proto_release(struct socket *sock);
-int proto_bind(struct socket *sock, struct sockaddr *saddr, int len);
+int protocol_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);
+int protocol_release(struct socket *sock);
+int protocol_bind(struct socket *sock, struct sockaddr *saddr, int len);
 
-#endif /* __AVIONICS_H__ */
+#endif /* __AVIONICS_PROTOCOL_H__ */

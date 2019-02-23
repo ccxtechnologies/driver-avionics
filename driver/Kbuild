@@ -1,8 +1,9 @@
-ccflags-y		+= -D__CHECK_ENDIAN__
-ccflags-y		+= -DDEBUG
+ccflags-y 	:= -I$(src)/include
+ccflags-y	+= -D__CHECK_ENDIAN__
 
 obj-m		+= avionics.o
-avionics-y	:= af_avionics.o proto.o proto-raw.o socket-list.o
+avionics-y	:= net/avionics.o net/protocol.o net/protocol-raw.o net/socket-list.o
 
 obj-m		+= vavionics.o
+vavionics-y	:= devices/vavionics.o
 

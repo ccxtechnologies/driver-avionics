@@ -20,18 +20,18 @@
 #include <linux/skbuff.h>
 #include <net/sock.h>
 
-#include "proto.h"
+#include "protocol.h"
 #include "socket-list.h"
 #include "avionics.h"
 
-struct proto_skb_priv {
+struct protocol_skb_priv {
 	int ifindex;
 	__u8 data[0];
 };
 
-int proto_get_dev_from_msg(struct proto_sock *psk,
-			   struct msghdr *msg, size_t size,
-			   struct net_device **dev)
+int protocol_get_dev_from_msg(struct protocol_sock *psk,
+			      struct msghdr *msg, size_t size,
+			      struct net_device **dev)
 {
 	int ifindex;
 
@@ -40,50 +40,47 @@ int proto_get_dev_from_msg(struct proto_sock *psk,
 				 msg->msg_name);
 
 		if (msg->msg_namelen < sizeof(*addr)) {
-			pr_err("proto: Message name wrong length: %d"
+			pr_err("avionics-protocol: Message name wrong length: %d"
 			       " should be %ld\n", msg->msg_namelen,
 			       sizeof(*addr));
 			return -EINVAL;
 		}
 
 		if (addr->avionics_family != AF_AVIONICS) {
-			pr_err("proto: Message in wrong family: %u"
+			pr_err("avionics-protocol: Message in wrong family: %u"
 			       " should be %u\n", addr->avionics_family,
 			       AF_AVIONICS);
 			return -EINVAL;
 		}
 
 		ifindex = addr->ifindex;
-		pr_debug("proto: ifindex %d from message.\n", ifindex);
-
 	} else {
 		ifindex = psk->ifindex;
-		pr_debug("proto: ifindex %d from socket.\n", ifindex);
 	}
 
 	/* Make sure the device is valid */
 	*dev = dev_get_by_index(sock_net(&psk->sk), ifindex);
 	if (!*dev) {
-		pr_err("proto: Can't find device %d.\n", ifindex);
+		pr_err("avionics-protocol: Can't find device %d.\n", ifindex);
 		return -ENXIO;
 	}
 
 	if (unlikely((*dev)->type != ARPHRD_AVIONICS)) {
-		pr_err("proto: Device %s is wrong type: %d.\n",
+		pr_err("avionics-protocol: Device %s is wrong type: %d.\n",
 		       (*dev)->name, (*dev)->type);
 		dev_put(*dev);
 		return -ENODEV;
 	}
 
 	if (unlikely(!((*dev)->flags & IFF_UP))) {
-		pr_err("proto: Device %s isn't up\n", (*dev)->name);
+		pr_err("avionics-protocol: Device %s is down.\n", (*dev)->name);
 		dev_put(*dev);
 		return -ENETDOWN;
 	}
 
 	if (unlikely(size > (*dev)->mtu)) {
-		pr_err("proto: %ld bytes fit in MTU of %d bytes.\n",
-		       size, (*dev)->mtu);
+		pr_err("avionics-protocol: %ld bytes too large for MTU of"
+		       " %d bytes.\n", size, (*dev)->mtu);
 		dev_put(*dev);
 		return -EMSGSIZE;
 	}
@@ -96,14 +93,14 @@ struct sk_buff* avionics_alloc_skb(struct net_device *dev, unsigned int size)
 {
 	struct sk_buff *skb;
 
-	skb = alloc_skb(size + sizeof(struct proto_skb_priv), GFP_KERNEL);
+	skb = alloc_skb(size + sizeof(struct protocol_skb_priv), GFP_KERNEL);
 	if (!skb) {
-		pr_err("avionics-proto: Unable to allocate skbuff\n");
+		pr_err("avionics-protocol: Unable to allocate skbuff\n");
 		return NULL;
 	}
 
-	skb_reserve(skb, sizeof(struct proto_skb_priv));
-	((struct proto_skb_priv *)(skb->head))->ifindex = dev->ifindex;
+	skb_reserve(skb, sizeof(struct protocol_skb_priv));
+	((struct protocol_skb_priv *)(skb->head))->ifindex = dev->ifindex;
 
 	skb->dev = dev;
 	skb->len = size;
@@ -119,22 +116,23 @@ struct sk_buff* avionics_alloc_skb(struct net_device *dev, unsigned int size)
 }
 EXPORT_SYMBOL(avionics_alloc_skb);
 
-struct sk_buff* proto_alloc_send_skb(struct net_device *dev, int flags,
-				     struct sock *sk, size_t size)
+struct sk_buff* protocol_alloc_send_skb(struct net_device *dev, int flags,
+					struct sock *sk, size_t size)
 {
 	struct sk_buff *skb;
 	int err;
 
-	skb = sock_alloc_send_skb(sk, size + sizeof(struct proto_skb_priv),
+	skb = sock_alloc_send_skb(sk, size + sizeof(struct protocol_skb_priv),
 				  flags, &err);
 
 	if (!skb) {
-		pr_err("proto: Unable to allocate skbuff: %d.\n", err);
+		pr_err("avionics-protocol: Unable to allocate skbuff: %d.\n",
+		       err);
 		return NULL;
 	}
 
-	skb_reserve(skb, sizeof(struct proto_skb_priv));
-	((struct proto_skb_priv *)(skb->head))->ifindex = dev->ifindex;
+	skb_reserve(skb, sizeof(struct protocol_skb_priv));
+	((struct protocol_skb_priv *)(skb->head))->ifindex = dev->ifindex;
 
 	sock_tx_timestamp(sk, sk->sk_tsflags, &skb_shinfo(skb)->tx_flags);
 
@@ -152,7 +150,7 @@ struct sk_buff* proto_alloc_send_skb(struct net_device *dev, int flags,
 	return skb;
 }
 
-int proto_send_to_netdev(struct net_device *dev, struct sk_buff *skb)
+int protocol_send_to_netdev(struct net_device *dev, struct sk_buff *skb)
 {
 	int err;
 
@@ -163,7 +161,8 @@ int proto_send_to_netdev(struct net_device *dev, struct sk_buff *skb)
 	}
 
 	if (err) {
-		pr_err("proto: Send to netdevice failed: %d\n", err);
+		pr_err("avionics-protocol: Send to netdevice failed: %d\n",
+		       err);
 		dev_put(dev);
 		return err;
 	}
@@ -172,12 +171,12 @@ int proto_send_to_netdev(struct net_device *dev, struct sk_buff *skb)
 	return 0;
 }
 
-int proto_getname(struct socket *sock, struct sockaddr *saddr,
-		  int *len, int peer)
+int protocol_getname(struct socket *sock, struct sockaddr *saddr,
+		     int *len, int peer)
 {
 	DECLARE_SOCKADDR(struct sockaddr_avionics *, addr, saddr);
 	struct sock *sk = sock->sk;
-	struct proto_sock *psk = (struct proto_sock*)sk;
+	struct protocol_sock *psk = (struct protocol_sock*)sk;
 
 	if (peer) {
 		return -EOPNOTSUPP;
@@ -192,7 +191,7 @@ int proto_getname(struct socket *sock, struct sockaddr *saddr,
 	return 0;
 }
 
-int proto_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
+int protocol_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 {
 	struct sock *sk = sock->sk;
 
@@ -205,17 +204,17 @@ int proto_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 	}
 }
 
-static void proto_rx(struct sk_buff *oskb, struct sock *sk)
+static void protocol_rx(struct sk_buff *oskb, struct sock *sk)
 {
 	struct sk_buff *skb;
 	struct sockaddr_avionics *addr;
 
-	pr_info("proto: Ingress packet\n");
+	pr_info("avionics-protocol: Ingress packet\n");
 
 	/* clone the given skb to be able to enqueue it into the rcv queue */
 	skb = skb_clone(oskb, GFP_ATOMIC);
 	if (!skb) {
-		pr_err("proto: Failed to allocate sk buffer clone,\n");
+		pr_err("avionics-protocol: Failed to allocate skbuff clone.\n");
 		return;
 	}
 
@@ -226,28 +225,26 @@ static void proto_rx(struct sk_buff *oskb, struct sock *sk)
 	addr->ifindex = skb->dev->ifindex;
 
 	if (sock_queue_rcv_skb(sk, skb) < 0) {
-		pr_err("proto: Failed to queue received message.\n");
+		pr_err("avionics-protocol: Failed to queue rx message.\n");
 		kfree_skb(skb);
 	}
 }
 
-int proto_release(struct socket *sock)
+int protocol_release(struct socket *sock)
 {
 	struct sock *sk = sock->sk;
-	struct proto_sock *psk = (struct proto_sock*)sk;
+	struct protocol_sock *psk = (struct protocol_sock*)sk;
 	struct net_device *dev = NULL;
 
 	if (!sk) {
 		return 1;
 	}
 
-	pr_debug("proto: Releasing AVIONICS Raw Socket\n");
-
 	dev = dev_get_by_index(sock_net(sk), psk->ifindex);
 	if (dev) {
-		socket_list_remove_socket(dev, proto_rx, sk);
+		socket_list_remove_socket(dev, protocol_rx, sk);
 	} else {
-		pr_warning("proto: No device registered with socket\n");
+		pr_warning("avionics-protocol: Not registered with socket\n");
 	}
 	dev_put(dev);
 
@@ -266,31 +263,29 @@ int proto_release(struct socket *sock)
 	return 0;
 }
 
-int proto_bind(struct socket *sock, struct sockaddr *saddr, int len)
+int protocol_bind(struct socket *sock, struct sockaddr *saddr, int len)
 {
 	DECLARE_SOCKADDR(struct sockaddr_avionics *, addr, saddr);
 	struct sock *sk = sock->sk;
-	struct proto_sock *psk = (struct proto_sock*)sk;
+	struct protocol_sock *psk = (struct protocol_sock*)sk;
 	struct net_device *dev;
 	int err;
 
-	pr_debug("proto: Binding Socket\n");
-
 	if (len != sizeof(*addr)) {
-		pr_err("proto: Address length should"
+		pr_err("avionics-protocol: Address length should"
 		       " be %ld not %d.\n", sizeof(*addr), len);
 		return -EINVAL;
 	}
 
 	if (!addr->ifindex) {
-		pr_err("proto: Must specify ifindex in Address.\n");
+		pr_err("avionics-protocol: Must specify ifindex in Address.\n");
 		return -EINVAL;
 	}
 
 	lock_sock(sk);
 
 	if (psk->bound && (addr->ifindex == psk->ifindex)) {
-		pr_debug("proto: Socket already bound to %d.\n",
+		pr_debug("avionics-protocol: Socket already bound to %d.\n",
 			 psk->ifindex);
 		release_sock(sk);
 		return 0;
@@ -299,24 +294,24 @@ int proto_bind(struct socket *sock, struct sockaddr *saddr, int len)
 	dev = dev_get_by_index(sock_net(sk), addr->ifindex);
 
 	if (!dev) {
-		pr_err("proto: Can't find device %d.\n",
+		pr_err("avionics-protocol: Can't find device %d.\n",
 		       addr->ifindex);
 		release_sock(sk);
 		return -ENODEV;
 	}
 
 	if (dev->type != ARPHRD_AVIONICS) {
-		pr_err("proto: Device %d isn't an avionics Device.\n",
+		pr_err("avionics-protocol: Device %d isn't type avionics.\n",
 		       addr->ifindex);
 		dev_put(dev);
 		release_sock(sk);
 		return -ENODEV;
 	}
 
-	err = socket_list_add_socket(dev, proto_rx, sk);
+	err = socket_list_add_socket(dev, protocol_rx, sk);
 	if (err) {
-		pr_err("proto: Failed to register socket with device %s: %d\n",
-		       dev->name, err);
+		pr_err("avionics-protocol: Failed to register socket with"
+		       " device %s: %d\n", dev->name, err);
 		dev_put(dev);
 		release_sock(sk);
 		return -ENODEV;

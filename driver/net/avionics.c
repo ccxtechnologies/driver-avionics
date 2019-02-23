@@ -23,14 +23,14 @@
 #include <net/sock.h>
 #include <linux/init.h>
 
-#include "proto-raw.h"
+#include "protocol-raw.h"
 #include "socket-list.h"
 #include "avionics.h"
 
-MODULE_DESCRIPTION("AVIONICS Socket Driver");
+MODULE_DESCRIPTION("Avionics Networking Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
-MODULE_VERSION("1.0.0");
+MODULE_VERSION("1.0.1");
 
 MODULE_ALIAS_NETPROTO(PF_AVIONICS);
 
@@ -47,8 +47,6 @@ static int avionics_sock_create(struct net *net, struct socket *sock,
 	static struct proto* p;
 	int err;
 
-	pr_debug("avionics: Creating new socket.\n");
-
 	sock->state = SS_UNCONNECTED;
 
 	if (!net_eq(net, &init_net)) {
@@ -58,9 +56,8 @@ static int avionics_sock_create(struct net *net, struct socket *sock,
 
 	switch (protocol) {
 	case AVIONICS_PROTO_RAW:
-		pr_debug("avionics: Raw Protocol.\n");
-		popts = proto_raw_get_ops();
-		p = proto_raw_get();
+		popts = protocol_raw_get_ops();
+		p = protocol_raw_get();
 		break;
 
 	default:
@@ -82,8 +79,8 @@ static int avionics_sock_create(struct net *net, struct socket *sock,
 	if (sk->sk_prot->init) {
 		err = sk->sk_prot->init(sk);
 		if (err) {
-			pr_err("avionics: Failed to init socket protocol: %d\n",
-			       err);
+			pr_err("avionics: Failed to init socket"
+			       " protocol %d: %d\n", protocol, err);
 			sock_orphan(sk);
 			sock_put(sk);
 			return err;
@@ -151,8 +148,8 @@ static int avionics_packet_rx(struct sk_buff *skb, struct net_device *dev,
 
 	err = socket_list_rx_funcs(dev, skb);
 	if (err) {
-		pr_err("avionics: Failed to call protocol rx functions: %d\n",
-		       err);
+		pr_err("avionics: Failed to call protocol rx"
+		       " functions for %s: %d\n", dev->name, err);
 		consume_skb(skb);
 		return NET_RX_DROP;
 	}
@@ -178,17 +175,17 @@ static __init int avionics_init(void)
 		return rc;
 	}
 
-	rc = proto_raw_register();
+	rc = protocol_raw_register();
 	if (rc) {
-		pr_err("avionics: Failed to register Raw Protocol: %d\n", rc);
+		pr_err("avionics: Failed to register raw protocol: %d\n", rc);
 		socket_list_exit();
 		return rc;
 	}
 
 	rc = sock_register(&avionics_net_proto_family);
 	if (rc) {
-		pr_err("avionics: Failed to register Socket Type: %d\n", rc);
-		proto_raw_unregister();
+		pr_err("avionics: Failed to register socket type: %d\n", rc);
+		protocol_raw_unregister();
 		socket_list_exit();
 		return rc;
 	}
@@ -197,7 +194,7 @@ static __init int avionics_init(void)
 	if (rc) {
 		pr_err("avionics: Failed to register with NetDev: %d\n", rc);
 		sock_unregister(PF_AVIONICS);
-		proto_raw_unregister();
+		protocol_raw_unregister();
 		socket_list_exit();
 		return rc;
 	}
@@ -219,7 +216,7 @@ static __exit void avionics_exit(void)
 	}
 
 	sock_unregister(PF_AVIONICS);
-	proto_raw_unregister();
+	protocol_raw_unregister();
 
 	socket_list_exit();
 

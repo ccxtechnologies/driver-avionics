@@ -11,13 +11,13 @@
  * GNU General Public License for more details.
  */
 
-#ifndef __PROTO_RAW_H__
-#define __PROTO_RAW_H__
+#ifndef __AVIONICS_PROTOCOL_RAW_H__
+#define __AVIONICS_PROTOCOL_RAW_H__
 
-const struct proto_ops* proto_raw_get_ops(void);
-struct proto* proto_raw_get(void);
+const struct proto_ops* protocol_raw_get_ops(void);
+struct proto* protocol_raw_get(void);
 
-int proto_raw_register(void);
-void proto_raw_unregister(void);
+int protocol_raw_register(void);
+void protocol_raw_unregister(void);
 
-#endif /* __PROTO_RAW_H__ */
+#endif /* __AVIONICS_PROTOCOL_RAW_H__ */
