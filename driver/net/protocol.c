@@ -89,7 +89,7 @@ int protocol_get_dev_from_msg(struct protocol_sock *psk,
 	return 0;
 }
 
-struct sk_buff* avionics_alloc_skb(struct net_device *dev, unsigned int size)
+struct sk_buff* protocol_alloc_skb(struct net_device *dev, unsigned int size)
 {
 	struct sk_buff *skb;
 
@@ -114,7 +114,6 @@ struct sk_buff* avionics_alloc_skb(struct net_device *dev, unsigned int size)
 
 	return skb;
 }
-EXPORT_SYMBOL(avionics_alloc_skb);
 
 struct sk_buff* protocol_alloc_send_skb(struct net_device *dev, int flags,
 					struct sock *sk, size_t size)

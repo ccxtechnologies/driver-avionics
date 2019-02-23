@@ -23,16 +23,17 @@ struct protocol_sock {
 };
 
 int protocol_get_dev_from_msg(struct protocol_sock *psk,
-			   struct msghdr *msg, size_t size,
-			   struct net_device **dev);
+			      struct msghdr *msg, size_t size,
+			      struct net_device **dev);
+struct sk_buff* protocol_alloc_skb(struct net_device *dev, unsigned int size);
 struct sk_buff* protocol_alloc_send_skb(struct net_device *dev,
-					 int flags,
-					 struct sock *sk,
-					 size_t size);
+					int flags,
+					struct sock *sk,
+					size_t size);
 int protocol_send_to_netdev(struct net_device *dev, struct sk_buff *skb);
 
 int protocol_getname(struct socket *sock, struct sockaddr *saddr,
-		  int *len, int peer);
+		     int *len, int peer);
 int protocol_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);
 int protocol_release(struct socket *sock);
 int protocol_bind(struct socket *sock, struct sockaddr *saddr, int len);

@@ -23,6 +23,7 @@
 #include <linux/init.h>
 
 #include "avionics.h"
+#include "avionics-device.h"
 
 MODULE_DESCRIPTION("Virtual Avionics Loopback Device");
 MODULE_LICENSE("GPL v2");
@@ -36,7 +37,7 @@ static void vavionics_rx(struct sk_buff *skb_xmit, struct net_device *dev)
 
 	pr_debug("vavionics: RX Packet\n");
 
-	skb = avionics_alloc_skb(dev, skb_xmit->len) ;
+	skb = avionics_device_alloc_skb(dev, skb_xmit->len) ;
 	if (!skb) {
 		pr_err("vavionics: Failed ot allocate RX buffer\n");
 		return;
