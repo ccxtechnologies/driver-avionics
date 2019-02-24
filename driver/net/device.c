@@ -103,12 +103,25 @@ static void device_setup(struct net_device *dev)
 	dev->features = NETIF_F_HW_CSUM;
 }
 
+static int device_validate(struct nlattr *tb[], struct nlattr *data[])
+{
+	if (!data) {
+		return 0;
+	}
+
+	/* TODO: check to make sure the setting is supported
+	 * by the interface type, ie. ARINC-429 RX,
+	 * return -EOPNOTSUPP; if it isn't */
+
+	return 0;
+}
+
 static struct rtnl_link_ops device_link_ops __read_mostly = {
 	.kind		= "device",
 	.maxtype	= IFLA_AVIONICS_MAX,
-	/* TODO: Missing some calls, see can */
 	.policy		= device_policy,
 	.setup		= device_setup,
+	.validate	= device_validate,
 	.changelink	= device_changelink,
 	.get_size	= device_get_size,
 	.fill_info	= device_fill_info,
