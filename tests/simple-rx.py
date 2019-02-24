@@ -13,7 +13,7 @@ AVIONICS_RAW = 1
 
 SIOCGIFINDEX = 0x8933
 
-device = "vavionics0"
+device = "avionics-lb0"
 
 def get_addr(sock, channel):
     data = struct.pack("16si", channel.encode(), 0)

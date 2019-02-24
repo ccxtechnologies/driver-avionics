@@ -30,16 +30,16 @@ MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.0.0");
 
-static void vavionics_rx(struct sk_buff *skb_xmit, struct net_device *dev)
+static void lb_rx(struct sk_buff *skb_xmit, struct net_device *dev)
 {
 	struct sk_buff *skb;
 	struct net_device_stats *stats = &dev->stats;
 
-	pr_debug("vavionics: RX Packet\n");
+	pr_debug("avionics-lb: RX Packet\n");
 
 	skb = avionics_device_alloc_skb(dev, skb_xmit->len) ;
 	if (!skb) {
-		pr_err("vavionics: Failed ot allocate RX buffer\n");
+		pr_err("avionics-lb: Failed ot allocate RX buffer\n");
 		return;
 	}
 
@@ -51,12 +51,12 @@ static void vavionics_rx(struct sk_buff *skb_xmit, struct net_device *dev)
 	netif_rx_ni(skb);
 }
 
-static netdev_tx_t vavionics_start_xmit(struct sk_buff *skb,
+static netdev_tx_t lb_start_xmit(struct sk_buff *skb,
 					struct net_device *dev)
 {
 	struct net_device_stats *stats = &dev->stats;
 
-	pr_debug("vavionics: TX Packet\n");
+	pr_debug("avionics-lb: TX Packet\n");
 
 	if (skb->protocol != htons(ETH_P_AVIONICS)) {
 	    kfree_skb(skb);
@@ -73,36 +73,36 @@ static netdev_tx_t vavionics_start_xmit(struct sk_buff *skb,
 	stats->tx_packets++;
 	stats->tx_bytes += skb->len;
 
-	vavionics_rx(skb, dev);
+	lb_rx(skb, dev);
 
 	consume_skb(skb);
 	return NETDEV_TX_OK;
 }
 
-static int vavionics_change_mtu(struct net_device *dev, int mtu)
+static int lb_change_mtu(struct net_device *dev, int mtu)
 {
 	if (dev->flags & IFF_UP) {
-		pr_err("vavionics: Can't change MTU when link is up.\n");
+		pr_err("avionics-lb: Can't change MTU when link is up.\n");
 		return -EBUSY;
 	}
 
 	if (mtu % sizeof(__u32)) {
-		pr_err("vavionics: MTU must be a multiple of 4 bytes.\n");
+		pr_err("avionics-lb: MTU must be a multiple of 4 bytes.\n");
 		return -EINVAL;
 	}
 
-	pr_info("vavionics: Setting up device %s MTU to %d\n", dev->name, mtu);
+	pr_info("avionics-lb: Setting up device %s MTU to %d\n", dev->name, mtu);
 
 	dev->mtu = mtu;
 	return 0;
 }
 
-static const struct net_device_ops vavionics_net_device_ops = {
-	.ndo_start_xmit = vavionics_start_xmit,
-	.ndo_change_mtu = vavionics_change_mtu,
+static const struct net_device_ops lb_net_device_ops = {
+	.ndo_start_xmit = lb_start_xmit,
+	.ndo_change_mtu = lb_change_mtu,
 };
 
-static void vavionics_rtnl_link_setup(struct net_device *dev)
+static void lb_rtnl_link_setup(struct net_device *dev)
 {
 	dev->type		= ARPHRD_AVIONICS;
 	dev->mtu		= sizeof(__u32)*32;
@@ -110,35 +110,35 @@ static void vavionics_rtnl_link_setup(struct net_device *dev)
 	dev->addr_len		= 0;
 	dev->tx_queue_len	= 0;
 	dev->flags		= IFF_NOARP;
-	dev->netdev_ops		= &vavionics_net_device_ops;
+	dev->netdev_ops		= &lb_net_device_ops;
 	dev->destructor		= free_netdev;
 }
 
-static struct rtnl_link_ops vavionics_rtnl_link_ops __read_mostly = {
-	.kind	= "vavionics",
-	.setup	= vavionics_rtnl_link_setup,
+static struct rtnl_link_ops lb_rtnl_link_ops __read_mostly = {
+	.kind	= "avionics-lb",
+	.setup	= lb_rtnl_link_setup,
 };
 
-static __init int vavionics_init(void)
+static __init int lb_init(void)
 {
 	int rc;
 
-	pr_info("vavionics: Initialising Driver\n");
+	pr_info("avionics-lb: Initialising Driver\n");
 
-	rc = rtnl_link_register(&vavionics_rtnl_link_ops);
+	rc = rtnl_link_register(&lb_rtnl_link_ops);
 	if (rc) {
-		pr_err("vavionics: Failed to register device: %d\n", rc);
+		pr_err("avionics-lb: Failed to register device: %d\n", rc);
 		return rc;
 	}
 
 	return 0;
 }
 
-static __exit void vavionics_exit(void)
+static __exit void lb_exit(void)
 {
-	rtnl_link_unregister(&vavionics_rtnl_link_ops);
-	pr_info("vavionics: Exited Driver\n");
+	rtnl_link_unregister(&lb_rtnl_link_ops);
+	pr_info("avionics-lb: Exited Driver\n");
 }
 
-module_init(vavionics_init);
-module_exit(vavionics_exit);
+module_init(lb_init);
+module_exit(lb_exit);

@@ -16,7 +16,7 @@ AVIONICS_RAW = 1
 
 SIOCGIFINDEX = 0x8933
 
-device = "vavionics0"
+device = "avionics-lb0"
 
 def error_code_to_str(code):
     try:

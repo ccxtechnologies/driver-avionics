@@ -1,13 +1,13 @@
 #!/bin/sh
 
-DEVICE=vavionics0
+DEVICE=avionics-lb0
 
 echo Loading Drivers
 modprobe avionics
-modprobe vavionics
+modprobe avionics-lb
 
 echo Creating $DEVICE
-ip link add dev $DEVICE type vavionics
+ip link add dev $DEVICE type avionics-lb
 ip link set dev $DEVICE up
 
 
