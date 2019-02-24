@@ -25,6 +25,7 @@
 #include "avionics-device.h"
 
 struct device_priv {
+	struct net_device *dev;
 	struct avionics_rate rate;
 	__u8 private[0];
 };
@@ -94,7 +95,7 @@ static const struct nla_policy device_policy[IFLA_AVIONICS_MAX + 1] = {
 static void device_setup(struct net_device *dev)
 {
 	dev->type = ARPHRD_AVIONICS;
-	dev->mtu = 4;
+	dev->mtu = sizeof(__u32);
 	dev->hard_header_len = 0;
 	dev->addr_len = 0;
 	dev->tx_queue_len = 10;
@@ -105,6 +106,7 @@ static void device_setup(struct net_device *dev)
 static struct rtnl_link_ops device_link_ops __read_mostly = {
 	.kind		= "device",
 	.maxtype	= IFLA_AVIONICS_MAX,
+	/* TODO: Missing some calls, see can */
 	.policy		= device_policy,
 	.setup		= device_setup,
 	.changelink	= device_changelink,
@@ -122,6 +124,8 @@ void device_netlink_unregister(void)
 {
 	rtnl_link_unregister(&device_link_ops);
 }
+
+/* ====================================================== */
 
 struct sk_buff* avionics_device_alloc_skb(struct net_device *dev,
 					  unsigned int size)
@@ -141,6 +145,19 @@ struct sk_buff* avionics_device_alloc_skb(struct net_device *dev,
 }
 EXPORT_SYMBOL_GPL(avionics_device_alloc_skb);
 
+void * avionics_device_priv(struct net_device *dev)
+{
+	struct device_priv *priv;
+
+	if (dev->type != ARPHRD_AVIONICS) {
+		return NULL;
+	}
+	priv = netdev_priv(dev);
+
+	return priv->private;
+}
+EXPORT_SYMBOL_GPL(avionics_device_priv);
+
 int avionics_device_register(struct net_device *dev)
 {
 	dev->rtnl_link_ops = &device_link_ops;
@@ -154,3 +171,40 @@ void avionics_device_unregister(struct net_device *dev)
 }
 EXPORT_SYMBOL_GPL(avionics_device_unregister);
 
+static struct net_device *avioinics_device_alloc(int sizeof_priv,
+						 const char *name_fmt)
+{
+	struct net_device *dev;
+	struct device_priv *priv;
+
+	dev = alloc_netdev(sizeof(*priv) + sizeof_priv,
+			   name_fmt, NET_NAME_UNKNOWN, device_setup);
+
+	if (!dev) {
+		pr_err("avionics-device: Failed to allocate netdev\n");
+		return NULL;
+	}
+
+	priv = netdev_priv(dev);
+	priv->dev = dev;
+
+	return dev;
+}
+
+struct net_device *avioinics_device_arinc429rx_alloc(int sizeof_priv)
+{
+	return avioinics_device_alloc(sizeof_priv, "arinc429rx%d");
+}
+EXPORT_SYMBOL_GPL(avioinics_device_arinc429rx_alloc);
+
+struct net_device *avioinics_device_arinc429tx_alloc(int sizeof_priv)
+{
+	return avioinics_device_alloc(sizeof_priv, "arinc429tx%d");
+}
+EXPORT_SYMBOL_GPL(avioinics_device_arinc429tx_alloc);
+
+void avionics_device_free(struct net_device *dev)
+{
+	free_netdev(dev);
+}
+EXPORT_SYMBOL_GPL(avionics_device_free);
