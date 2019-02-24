@@ -24,18 +24,16 @@ def get_addr(sock, channel):
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 
 # == create socket ==
-sock = socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW)
+with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
 
-# == bind to interface ==
-# Python doesn't know about PF_ARINC so directly use libc
-addr = get_addr(sock, device)
-err = libc.bind(sock.fileno(), addr, len(addr))
+    # == bind to interface ==
+    # Python doesn't know about PF_ARINC so directly use libc
+    addr = get_addr(sock, device)
+    err = libc.bind(sock.fileno(), addr, len(addr))
 
-if err:
-    raise OSError(err, "Failed to bind to socket")
+    if err:
+        raise OSError(err, "Failed to bind to socket")
 
-# == receive data example ==
-recv = sock.recv(4)
-print(recv)
-
-sock.close()
+    # == receive data example ==
+    recv = sock.recv(4)
+    print(recv)

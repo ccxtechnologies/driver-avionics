@@ -40,22 +40,20 @@ def get_addr(sock, channel):
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 
 # == create socket ==
-sock = socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW)
+with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
 
-# == bind to interface ==
-# Python doesn't know about PF_ARINC so directly use libc
-addr = get_addr(sock, device)
-err = libc.bind(sock.fileno(), addr, len(addr))
-if err:
-    raise OSError(err, "Failed to bind to socket")
+    # == bind to interface ==
+    # Python doesn't know about PF_ARINC so directly use libc
+    addr = get_addr(sock, device)
+    err = libc.bind(sock.fileno(), addr, len(addr))
+    if err:
+        raise OSError(err, "Failed to bind to socket")
 
-# == send data example ==
-sent = sock.send(bytes((0x01,0x02,0x03,0x04)))
-if sent < 0:
-    print(f"Send failed {error_code_to_str(-sent)}")
-    if sent == -1:
-        print("Is interface up?")
-else:
-    print(f"Sent {sent} bytes.")
-
-sock.close()
+    # == send data example ==
+    sent = sock.send(bytes((0x01,0x02,0x03,0x04)))
+    if sent < 0:
+        print(f"Send failed {error_code_to_str(-sent)}")
+        if sent == -1:
+            print("Is interface up?")
+    else:
+        print(f"Sent {sent} bytes.")
