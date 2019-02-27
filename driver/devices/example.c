@@ -47,7 +47,7 @@ static int example_change_mtu(struct net_device *dev, int mtu)
 	}
 
 	if (mtu % sizeof(__u32)) {
-		pr_err("avionics-example: MTU must be a multiple of 4 bytes.\n");
+		pr_err("avionics-example: MTU must be a multiple of 4.\n");
 		return -EINVAL;
 	}
 

@@ -117,7 +117,7 @@ static int device_validate(struct nlattr *tb[], struct nlattr *data[])
 }
 
 static struct rtnl_link_ops device_link_ops __read_mostly = {
-	.kind		= "device",
+	.kind		= "avionics",
 	.maxtype	= IFLA_AVIONICS_MAX,
 	.policy		= device_policy,
 	.setup		= device_setup,
