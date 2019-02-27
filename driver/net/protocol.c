@@ -213,10 +213,10 @@ int protocol_release(struct socket *sock)
 	dev = dev_get_by_index(sock_net(sk), psk->ifindex);
 	if (dev) {
 		socket_list_remove_socket(dev, protocol_rx, sk);
+		dev_put(dev);
 	} else {
 		pr_warning("avionics-protocol: Not registered with socket\n");
 	}
-	dev_put(dev);
 
 	lock_sock(sk);
 
