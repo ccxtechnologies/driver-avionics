@@ -214,8 +214,6 @@ int protocol_release(struct socket *sock)
 	if (dev) {
 		socket_list_remove_socket(dev, protocol_rx, sk);
 		dev_put(dev);
-	} else {
-		pr_warning("avionics-protocol: Not registered with socket\n");
 	}
 
 	lock_sock(sk);
