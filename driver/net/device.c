@@ -26,7 +26,7 @@
 
 struct device_priv {
 	struct net_device *dev;
-	struct avionics_rate rate;
+	struct avionics_ops *ops;
 	__u8 private[0];
 };
 
@@ -37,23 +37,30 @@ static int device_changelink(struct net_device *dev,
 
 	ASSERT_RTNL();
 
-	if (data[IFLA_AVIONICS_RATE]) {
+	if (data[IFLA_AVIONICS_RATE] && priv->ops &&
+	    priv->ops->set_rate) {
 		struct avionics_rate rate;
 
-		if (dev->flags & IFF_UP) {
-			return -EBUSY;
-		}
+		memcpy(&rate, nla_data(data[IFLA_AVIONICS_RATE]), sizeof(rate));
+		return priv->ops->set_rate(&rate, dev);
+	}
 
-		memcpy(&rate, nla_data(data[IFLA_AVIONICS_RATE]),
-		       sizeof(rate));
+	if (data[IFLA_AVIONICS_ARINC429RX] && priv->ops &&
+	    priv->ops->set_arinc429rx) {
+		struct avionics_arinc429rx arinc429rx;
 
-		pr_info("device-device: Setting rate to %d:%d\n",
-			rate.tx_rate_hz, rate.rx_rate_hz);
+		memcpy(&arinc429rx, nla_data(data[IFLA_AVIONICS_ARINC429RX]),
+		       sizeof(arinc429rx));
+		return priv->ops->set_arinc429rx(&arinc429rx, dev);
+	}
 
-		/* TODO: Call a set rate callback and return error
-		 * if there is one */
-		memcpy(&priv->rate, &rate, sizeof(rate));
+	if (data[IFLA_AVIONICS_ARINC429TX] && priv->ops &&
+	    priv->ops->set_arinc429tx) {
+		struct avionics_arinc429tx arinc429tx;
 
+		memcpy(&arinc429tx, nla_data(data[IFLA_AVIONICS_ARINC429TX]),
+		       sizeof(arinc429tx));
+		return priv->ops->set_arinc429tx(&arinc429tx, dev);
 	}
 
 	return 0;
@@ -61,9 +68,20 @@ static int device_changelink(struct net_device *dev,
 
 static size_t device_get_size(const struct net_device *dev)
 {
+	struct device_priv *priv = netdev_priv(dev);
 	size_t size = 0;
 
-	size += nla_total_size(sizeof(struct avionics_rate));
+	if(priv->ops && priv->ops->set_rate) {
+		size += nla_total_size(sizeof(struct avionics_rate));
+	}
+
+	if(priv->ops && priv->ops->set_arinc429rx) {
+		size += nla_total_size(sizeof(struct avionics_arinc429rx));
+	}
+
+	if(priv->ops && priv->ops->set_arinc429tx) {
+		size += nla_total_size(sizeof(struct avionics_arinc429tx));
+	}
 
 	return size;
 }
@@ -71,12 +89,44 @@ static size_t device_get_size(const struct net_device *dev)
 static int device_fill_info(struct sk_buff *skb, const struct net_device *dev)
 {
 	struct device_priv *priv = netdev_priv(dev);
+	int err;
 
-	if (
-		nla_put(skb, IFLA_AVIONICS_RATE,
-			sizeof(priv->rate), &priv->rate)
-	) {
-		return -EMSGSIZE;
+	if (priv->ops && priv->ops->get_rate) {
+		struct avionics_rate rate;
+		priv->ops->get_rate(&rate, dev);
+
+		err = nla_put(skb, IFLA_AVIONICS_RATE, sizeof(rate), &rate);
+		if (err) {
+			pr_warn("avionics-device: Couldn't set rate in nla\n");
+			return -EMSGSIZE;
+		}
+	}
+
+	if (priv->ops && priv->ops->get_arinc429rx) {
+		struct avionics_arinc429rx arinc429rx;
+		priv->ops->get_arinc429rx(&arinc429rx, dev);
+
+		err = nla_put(skb, IFLA_AVIONICS_ARINC429RX,
+			      sizeof(arinc429rx), &arinc429rx);
+		if (err) {
+			pr_warn("avionics-device: Failed to set"
+				" ARINC-429 RX in nla\n");
+			return -EMSGSIZE;
+		}
+	}
+
+	if (priv->ops && priv->ops->get_arinc429tx) {
+		struct avionics_arinc429tx arinc429tx;
+		priv->ops->get_arinc429tx(&arinc429tx, dev);
+
+		err = nla_put(skb, IFLA_AVIONICS_ARINC429TX,
+			      sizeof(arinc429tx), &arinc429tx);
+		if (err) {
+			pr_warn("avionics-device: Failed to set"
+				" ARINC-429 TX in nla\n");
+			return -EMSGSIZE;
+		}
+
 	}
 
 	return 0;
@@ -89,7 +139,15 @@ static int device_newlink(struct net *src_net, struct net_device *dev,
 }
 
 static const struct nla_policy device_policy[IFLA_AVIONICS_MAX + 1] = {
-	[IFLA_AVIONICS_RATE] = { .len = sizeof(struct avionics_rate) },
+	[IFLA_AVIONICS_RATE] = {
+		.len = sizeof(struct avionics_rate)
+	},
+	[IFLA_AVIONICS_ARINC429RX] = {
+		.len = sizeof(struct avionics_arinc429rx)
+	},
+	[IFLA_AVIONICS_ARINC429TX] = {
+		.len = sizeof(struct avionics_arinc429tx)
+	},
 };
 
 static void device_setup(struct net_device *dev)
@@ -103,25 +161,11 @@ static void device_setup(struct net_device *dev)
 	dev->features = NETIF_F_HW_CSUM;
 }
 
-static int device_validate(struct nlattr *tb[], struct nlattr *data[])
-{
-	if (!data) {
-		return 0;
-	}
-
-	/* TODO: check to make sure the setting is supported
-	 * by the interface type, ie. ARINC-429 RX,
-	 * return -EOPNOTSUPP; if it isn't */
-
-	return 0;
-}
-
 static struct rtnl_link_ops device_link_ops __read_mostly = {
 	.kind		= "avionics",
 	.maxtype	= IFLA_AVIONICS_MAX,
 	.policy		= device_policy,
 	.setup		= device_setup,
-	.validate	= device_validate,
 	.changelink	= device_changelink,
 	.get_size	= device_get_size,
 	.fill_info	= device_fill_info,
@@ -184,14 +228,19 @@ void avionics_device_unregister(struct net_device *dev)
 }
 EXPORT_SYMBOL_GPL(avionics_device_unregister);
 
-static struct net_device *avioinics_device_alloc(int sizeof_priv,
-						 const char *name_fmt)
+static struct net_device *avionics_device_alloc(int sizeof_priv,
+						struct avionics_ops *ops)
 {
 	struct net_device *dev;
 	struct device_priv *priv;
 
-	dev = alloc_netdev(sizeof(*priv) + sizeof_priv,
-			   name_fmt, NET_NAME_UNKNOWN, device_setup);
+	if (!ops) {
+		pr_err("avionics-device: No ops defined\n");
+		return NULL;
+	}
+
+	dev = alloc_netdev(sizeof(*priv) + sizeof_priv, ops->name,
+			   NET_NAME_UNKNOWN, device_setup);
 
 	if (!dev) {
 		pr_err("avionics-device: Failed to allocate netdev\n");
@@ -203,18 +252,7 @@ static struct net_device *avioinics_device_alloc(int sizeof_priv,
 
 	return dev;
 }
-
-struct net_device *avioinics_device_arinc429rx_alloc(int sizeof_priv)
-{
-	return avioinics_device_alloc(sizeof_priv, "arinc429rx%d");
-}
 EXPORT_SYMBOL_GPL(avioinics_device_arinc429rx_alloc);
-
-struct net_device *avioinics_device_arinc429tx_alloc(int sizeof_priv)
-{
-	return avioinics_device_alloc(sizeof_priv, "arinc429tx%d");
-}
-EXPORT_SYMBOL_GPL(avioinics_device_arinc429tx_alloc);
 
 void avionics_device_free(struct net_device *dev)
 {

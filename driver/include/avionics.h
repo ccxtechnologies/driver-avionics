@@ -62,13 +62,39 @@ struct sockaddr_avionics {
 /* ============= Defintions for Netlink (RNTL) Interface =============== */
 
 struct avionics_rate {
-	__u32 rx_rate_hz;
-	__u32 tx_rate_hz;
+	__u32 rate_hz;
+};
+
+#define AVIONICS_ARINC429RX_FLIP_LABEL_BITS		(1<<7)
+#define AVIONICS_ARINC429RX_SD9_MASK			(1<<6)
+#define AVIONICS_ARINC429RX_SD10_MASK			(1<<5)
+#define AVIONICS_ARINC429RX_SD_MASK_ENABLE		(1<<4)
+#define AVIONICS_ARINC429RX_PARITY_CHECK		(1<<3)
+#define AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE		(1<<2)
+#define AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE	(1<<1)
+
+struct avionics_arinc429rx {
+	__u8 flags;
+	__u8 padding;
+	__u8 priority_labels[3];
+	__u8 label_filers[32]; /* one bit per label, starting at 0xFF */
+};
+
+#define AVIONICS_ARINC429TX_FLIP_LABEL_BITS	(1<<6)
+#define AVIONICS_ARINC429TX_SELF_TEST		(1<<4)
+#define AVIONICS_ARINC429TX_EVEN_PARITY		(1<<3)
+#define AVIONICS_ARINC429TX_PARITY_SET		(1<<2)
+
+struct avionics_arinc429tx {
+	__u8 flags;
+	__u8 padding[3];
 };
 
 enum {
 	IFLA_AVIONICS_UNSPEC,
 	IFLA_AVIONICS_RATE,
+	IFLA_AVIONICS_ARINC429RX,
+	IFLA_AVIONICS_ARINC429TX,
 	__IFLA_AVIONICS_MAX
 };
 

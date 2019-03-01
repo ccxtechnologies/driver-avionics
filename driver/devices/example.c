@@ -30,11 +30,58 @@ MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.0.0");
 
-struct net_device *example_rx0;
+struct net_device *example_rx;
 
 struct example_priv {
-	int some_config;
-	int fifo_depth;
+	__u32 fifo_depth;
+	bool highspeed;
+};
+
+static int example_set_rate(struct avionics_rate *rate, struct net_device *dev)
+{
+	struct example_priv *priv;
+	priv = avionics_device_priv(dev);
+
+	if (!priv) {
+		pr_err("avionics-example: Failed to get private data\n");
+		return -EINVAL;
+	}
+
+	if(rate->rate_hz == 100000) {
+		pr_info("avionics-example: high-speed\n");
+		priv->highspeed = true;
+	} else if(rate->rate_hz == 12500) {
+		pr_info("avionics-example: low-speed\n");
+		priv->highspeed = false;
+	} else {
+		pr_warn("avionics-example: speed must be 100000 or 12500 Hz\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static void example_get_rate(struct avionics_rate *rate, struct net_device *dev)
+{
+	struct example_priv *priv;
+	priv = avionics_device_priv(dev);
+
+	if (!priv) {
+		pr_err("avionics-example: Failed to get private data\n");
+		return;
+	}
+
+	if(priv->highspeed) {
+		rate->rate_hz = 100000;
+	} else {
+		rate->rate_hz = 12500;
+	}
+}
+
+static struct avionics_ops example_avionics_ops = {
+	.name = "arinc429erx",
+	.set_rate = example_set_rate,
+	.get_rate = example_get_rate,
 };
 
 static int example_change_mtu(struct net_device *dev, int mtu)
@@ -78,7 +125,8 @@ static __init int example_init(void)
 
 	pr_info("avionics-example: Initialising Driver\n");
 
-	net = avioinics_device_arinc429rx_alloc(sizeof(*priv));
+	net = avionics_device_arinc429rx_alloc(sizeof(*priv),
+					       &example_avionics_ops);
 	if (!net) {
 		pr_err("avionics-example: Failed to allocate RX ARINC-429\n");
 		return -ENOMEM;
@@ -91,13 +139,14 @@ static __init int example_init(void)
 		pr_err("avionics-example: Failed to get private data\n");
 		return -EINVAL;
 	}
-	priv->fifo_depth = 32*sizeof(__u32);
+	priv->fifo_depth = 32;
+	priv->highspeed = false;
 
-	example_rx0 = net;
-	err = avionics_device_register(example_rx0);
+	example_rx = net;
+	err = avionics_device_register(example_rx);
 	if (err) {
 		pr_err("avionics-example: Failed to register RX ARINC-429\n");
-		avionics_device_free(example_rx0);
+		avionics_device_free(example_rx);
 		return -EINVAL;
 	}
 
@@ -106,8 +155,8 @@ static __init int example_init(void)
 
 static __exit void example_exit(void)
 {
-	avionics_device_unregister(example_rx0);
-	avionics_device_free(example_rx0);
+	avionics_device_unregister(example_rx);
+	avionics_device_free(example_rx);
 
 	pr_info("avionics-example: Exited Driver\n");
 }
