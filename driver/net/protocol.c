@@ -73,7 +73,7 @@ int protocol_get_dev_from_msg(struct protocol_sock *psk,
 
 		if (msg->msg_namelen < sizeof(*addr)) {
 			pr_err("avionics-protocol: Message name wrong length: %d"
-			       " should be %ld\n", msg->msg_namelen,
+			       " should be %zu\n", msg->msg_namelen,
 			       sizeof(*addr));
 			return -EINVAL;
 		}
@@ -111,7 +111,7 @@ int protocol_get_dev_from_msg(struct protocol_sock *psk,
 	}
 
 	if (unlikely(size > (*dev)->mtu)) {
-		pr_err("avionics-protocol: %ld bytes too large for MTU of"
+		pr_err("avionics-protocol: %zu bytes too large for MTU of"
 		       " %d bytes.\n", size, (*dev)->mtu);
 		dev_put(*dev);
 		return -EMSGSIZE;
@@ -241,7 +241,7 @@ int protocol_bind(struct socket *sock, struct sockaddr *saddr, int len)
 
 	if (len != sizeof(*addr)) {
 		pr_err("avionics-protocol: Address length should"
-		       " be %ld not %d.\n", sizeof(*addr), len);
+		       " be %zu not %d.\n", sizeof(*addr), len);
 		return -EINVAL;
 	}
 

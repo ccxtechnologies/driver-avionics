@@ -9,3 +9,6 @@ avionics-lb-y	:= devices/lb.o
 
 obj-m		+= avionics-example.o
 avionics-example-y	:= devices/example.o
+
+obj-m		+= avionics-hi3593.o
+avionics-hi3593-y	:= devices/hi3593.o
