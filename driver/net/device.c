@@ -249,6 +249,7 @@ struct net_device *avionics_device_alloc(int sizeof_priv,
 
 	priv = netdev_priv(dev);
 	priv->dev = dev;
+	priv->ops = ops;
 
 	return dev;
 }
