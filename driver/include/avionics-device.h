@@ -20,24 +20,26 @@
 struct avionics_ops {
 	const char *name;
 
-	int (*set_rate)(struct avionics_rate *rate, struct net_device *dev);
-	void (*get_rate)(struct avionics_rate *rate, struct net_device *dev);
+	int (*set_rate)(struct avionics_rate *rate,
+			const struct net_device *dev);
+	void (*get_rate)(struct avionics_rate *rate,
+			 const struct net_device *dev);
 
 	int (*set_arinc429rx)(struct avionics_arinc429rx *config,
-			      struct net_device *dev);
+			      const struct net_device *dev);
 	void (*get_arinc429rx)(struct avionics_arinc429rx *config,
-			       struct net_device *dev);
+			       const struct net_device *dev);
 
 	int (*set_arinc429tx)(struct avionics_arinc429tx *config,
-			      struct net_device *dev);
+			      const struct net_device *dev);
 	void (*get_arinc429tx)(struct avionics_arinc429tx *config,
-			       struct net_device *dev);
+			       const struct net_device *dev);
 };
 
 struct sk_buff* avionics_device_alloc_skb(struct net_device *dev,
 					  unsigned int size);
 
-void * avionics_device_priv(struct net_device *dev);
+void * avionics_device_priv(const struct net_device *dev);
 
 int avionics_device_register(struct net_device *dev);
 void avionics_device_unregister(struct net_device *dev);

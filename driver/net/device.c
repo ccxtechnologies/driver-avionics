@@ -202,7 +202,7 @@ struct sk_buff* avionics_device_alloc_skb(struct net_device *dev,
 }
 EXPORT_SYMBOL_GPL(avionics_device_alloc_skb);
 
-void * avionics_device_priv(struct net_device *dev)
+void * avionics_device_priv(const struct net_device *dev)
 {
 	struct device_priv *priv;
 
@@ -228,8 +228,8 @@ void avionics_device_unregister(struct net_device *dev)
 }
 EXPORT_SYMBOL_GPL(avionics_device_unregister);
 
-static struct net_device *avionics_device_alloc(int sizeof_priv,
-						struct avionics_ops *ops)
+struct net_device *avionics_device_alloc(int sizeof_priv,
+					 struct avionics_ops *ops)
 {
 	struct net_device *dev;
 	struct device_priv *priv;
@@ -252,7 +252,7 @@ static struct net_device *avionics_device_alloc(int sizeof_priv,
 
 	return dev;
 }
-EXPORT_SYMBOL_GPL(avioinics_device_arinc429rx_alloc);
+EXPORT_SYMBOL_GPL(avionics_device_alloc);
 
 void avionics_device_free(struct net_device *dev)
 {

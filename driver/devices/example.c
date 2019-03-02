@@ -37,7 +37,8 @@ struct example_priv {
 	bool highspeed;
 };
 
-static int example_set_rate(struct avionics_rate *rate, struct net_device *dev)
+static int example_set_rate(struct avionics_rate *rate,
+			    const struct net_device *dev)
 {
 	struct example_priv *priv;
 	priv = avionics_device_priv(dev);
@@ -61,7 +62,8 @@ static int example_set_rate(struct avionics_rate *rate, struct net_device *dev)
 	return 0;
 }
 
-static void example_get_rate(struct avionics_rate *rate, struct net_device *dev)
+static void example_get_rate(struct avionics_rate *rate,
+			     const struct net_device *dev)
 {
 	struct example_priv *priv;
 	priv = avionics_device_priv(dev);
@@ -125,8 +127,7 @@ static __init int example_init(void)
 
 	pr_info("avionics-example: Initialising Driver\n");
 
-	net = avionics_device_arinc429rx_alloc(sizeof(*priv),
-					       &example_avionics_ops);
+	net = avionics_device_alloc(sizeof(*priv), &example_avionics_ops);
 	if (!net) {
 		pr_err("avionics-example: Failed to allocate RX ARINC-429\n");
 		return -ENOMEM;
