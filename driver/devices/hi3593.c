@@ -22,6 +22,7 @@
 #include <linux/skbuff.h>
 #include <linux/init.h>
 #include <linux/spi/spi.h>
+#include <linux/of_gpio.h>
 
 #include "avionics.h"
 #include "avionics-device.h"
@@ -33,7 +34,7 @@ MODULE_VERSION("1.0.0");
 
 #define HI3593_MTU	(32*sizeof(__u32)) /* 32 word FIFO */
 
-struct hi3593_devices {
+struct hi3593 {
 	struct net_device *rx[2];
 	struct net_device *tx;
 	int reset_gpio;
@@ -142,16 +143,17 @@ static int hi3593_probe(struct spi_device *spi)
 
 	pr_info("avionics-hi3593: Adding Device\n");
 
-	devices = devm_kzalloc(dev, sizeof(*devices), GFP_KERNEL);
-	if (!devices) {
-		pr_err("avionics-hi3593: Failed to allocate devices memory\n");
+	hi3593 = devm_kzalloc(dev, sizeof(*hi3593), GFP_KERNEL);
+	if (!hi3593) {
+		pr_err("avionics-hi3593: Failed to allocate hi3593 memory\n");
 		return -ENOMEM;
 	}
+
+	spi_set_drvdata(spi, hi3593);
 
 	hi3593->reset_gpio = of_get_named_gpio(dev->of_node, "reset-gpio", 0);
 	if (!gpio_is_valid(hi3593->reset_gpio)) {
 		pr_err("avionics-hi3593: Reset GPIO is not valid\n");
-		kfree(hi3593);
 		return -EINVAL;
 	}
 
@@ -159,16 +161,14 @@ static int hi3593_probe(struct spi_device *spi)
 				    GPIOF_OUT_INIT_LOW, "reset");
 	if (err) {
 		pr_err("avionics-hi3593: Failed to register Reset GPIO\n");
-		kfree(hi3593);
 		return err;
 	}
 
 	usleep_range(100, 150);
-	gpio_set_value(devices->reset_gpio, 1);
+	gpio_set_value(hi3593->reset_gpio, 1);
 
 	/* TODO: Create net devices */
 
-	spi_set_drvdata(spi, devices);
 
 	/* TODO: Setup IRQs */
 
@@ -183,8 +183,12 @@ static int hi3593_probe(struct spi_device *spi)
 
 static int hi3593_remove(struct spi_device *spi)
 {
+	struct hi3593 *hi3593 = spi_get_drvdata(spi);
 
 	pr_info("avionics-hi3593: Removing Device\n");
+
+	gpio_free(hi3593->reset_gpio);
+
 	return 0;
 }
 
