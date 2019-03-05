@@ -38,12 +38,19 @@ MODULE_VERSION("1.0.0");
 #define HI3593_OPCODE_RD_TX_STATUS	0x80
 #define HI3593_OPCODE_RD_ALCK		0xd4
 #define HI3593_OPCODE_WR_ALCK		0x38
+
 #define HI3593_OPCODE_RD_RX1_CNTRL	0x94
-#define HI3593_OPCODE_WR_RX1_CNTRL	0x10
 #define HI3593_OPCODE_RD_RX2_CNTRL	0xB4
-#define HI3593_OPCODE_WR_RX2_CNTRL	0x24
 #define HI3593_OPCODE_RD_TX_CNTRL	0x84
+
+#define HI3593_OPCODE_WR_RX1_CNTRL	0x10
+#define HI3593_OPCODE_WR_RX2_CNTRL	0x24
 #define HI3593_OPCODE_WR_TX_CNTRL	0x08
+
+#define HI3593_OPCODE_RD_RX1_PRIORITY	0x9c
+#define HI3593_OPCODE_RD_RX2_PRIORITY	0xbc
+#define HI3593_OPCODE_RD_RX1_FILTERS	0x98
+#define HI3593_OPCODE_RD_RX2_FILTERS	0xb8
 
 #define HI3593_NUM_TX	1
 #define HI3593_NUM_RX	2
@@ -136,7 +143,6 @@ static void hi3593_get_rate(struct avionics_rate *rate,
 	__u8 cmd;
 	ssize_t status;
 
-
 	priv = avionics_device_priv(dev);
 	if (!priv) {
 		pr_err("avionics-hi3593: Failed to get private data\n");
@@ -164,10 +170,46 @@ static void hi3593_get_rate(struct avionics_rate *rate,
 	}
 }
 
+static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
+				   const struct net_device *dev)
+{
+	struct hi3593_priv *priv;
+	__u8 rd_cntrl, rd_priority, rd_filters;
+	ssize_t status;
+
+	priv = avionics_device_priv(dev);
+	if (!priv) {
+		pr_err("avionics-hi3593: Failed to get private data\n");
+		return;
+	}
+
+	if (priv->rx_index == 0) {
+		rd_cntrl = HI3593_OPCODE_RD_RX1_CNTRL;
+		rd_priority = HI3593_OPCODE_RD_RX1_PRIORITY;
+		rd_filters = HI3593_OPCODE_RD_RX1_FILTERS;
+	} else if (priv->rx_index == 1) {
+		rd_cntrl = HI3593_OPCODE_RD_RX2_CNTRL;
+		rd_priority = HI3593_OPCODE_RD_RX2_PRIORITY;
+		rd_filters = HI3593_OPCODE_RD_RX2_FILTERS;
+	} else {
+		pr_err("avionics-hi3593: No valid rx port index\n");
+		return;
+	}
+
+	status = spi_w8r8(priv->spi, &config->flags);
+	if (status < 0) {
+		pr_err("avionics-hi3593: Failed to get rx cntrl: %d\n", status);
+	}
+
+	/* TODO: Read priority filters */
+	/* TODO: Read label filters */
+}
+
 static struct avionics_ops hi3593_arinc429rx_ops = {
 	.name = "arinc429rx%d",
 	.set_rate = hi3593_set_rate,
 	.get_rate = hi3593_get_rate,
+	.get_arinc429rx = hi3593_get_arinc429rx,
 	/* TODO: Add Configuration routines */
 };
 
@@ -191,8 +233,6 @@ static int hi3593_change_mtu(struct net_device *dev, int mtu)
 static const struct net_device_ops hi3593_netdev_ops = {
 	.ndo_change_mtu = hi3593_change_mtu,
 };
-
-/* ======================== */
 
 static const struct of_device_id hi3593_of_device_id[] = {
 	{ .compatible	= "holt,hi3593" },
