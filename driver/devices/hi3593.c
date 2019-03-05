@@ -39,11 +39,20 @@ MODULE_VERSION("1.0.0");
 #define HI3593_OPCODE_RD_ALCK		0xd4
 #define HI3593_OPCODE_WR_ALCK		0x38
 
+#define HI3593_NUM_TX	1
+#define HI3593_NUM_RX	2
+
 struct hi3593 {
-	struct net_device *rx[2];
-	struct net_device *tx;
+	struct net_device *rx[HI3593_NUM_RX];
+	struct net_device *tx[HI3593_NUM_TX];
 	int reset_gpio;
 	__u32 aclk;
+};
+
+struct hi3593_priv {
+	struct spi_device *spi;
+	int tx_index;
+	int rx_index;
 };
 
 static int hi3593_set_rate(struct avionics_rate *rate,
@@ -119,7 +128,7 @@ static int hi3593_change_mtu(struct net_device *dev, int mtu)
 	return 0;
 }
 
-static const struct net_device_ops hi3593_rx_netdev_ops = {
+static const struct net_device_ops hi3593_netdev_ops = {
 	.ndo_change_mtu = hi3593_change_mtu,
 };
 
@@ -249,11 +258,97 @@ static int hi3593_set_aclk(struct spi_device *spi)
 	return 0;
 }
 
+static int hi3593_create_netdevs(struct spi_device *spi)
+{
+	struct hi3593 *hi3593 = spi_get_drvdata(spi);
+	struct hi3593_priv *priv;
+	int i, err;
+
+	for (i = 0; i < HI3593_NUM_TX; i++) {
+		hi3593->tx[i] = avionics_device_alloc(sizeof(*priv),
+						      &hi3593_arinc429tx_ops);
+		if (!hi3593->tx[i] ) {
+			pr_err("avionics-hi3593: Failed to allocate"
+			       " TX %d netdev\n", i);
+			return -ENOMEM;
+		}
+
+		hi3593->tx[i]->netdev_ops = &hi3593_netdev_ops;
+		hi3593->tx[i]->mtu = HI3593_MTU;
+		priv = avionics_device_priv(hi3593->tx[i]);
+
+		if (!priv) {
+			pr_err("avionics-hi3593: Failed to get private data"
+			       " for TX %d\n", i);
+			return -EINVAL;
+		}
+		priv->spi = spi;
+		priv->tx_index = i;
+		priv->rx_index = -1;
+
+		err = avionics_device_register(hi3593->tx[i]);
+		if (err) {
+			pr_err("avionics-hi3592: Failed to register"
+			       " TX %d netdev\n", i);
+			avionics_device_free(hi3593->tx[i]);
+			return -EINVAL;
+		}
+	}
+
+	for (i = 0; i < HI3593_NUM_RX; i++) {
+		hi3593->rx[i] = avionics_device_alloc(sizeof(*priv),
+						      &hi3593_arinc429rx_ops);
+		if (!hi3593->rx[i] ) {
+			pr_err("avionics-hi3593: Failed to allocate"
+			       " RX %d netdev\n", i);
+			return -ENOMEM;
+		}
+
+		hi3593->rx[i]->netdev_ops = &hi3593_netdev_ops;
+		hi3593->rx[i]->mtu = HI3593_MTU;
+		priv = avionics_device_priv(hi3593->rx[i]);
+
+		if (!priv) {
+			pr_err("avionics-hi3593: Failed to get private data"
+			       " for RX %d\n", i);
+			return -EINVAL;
+		}
+		priv->spi = spi;
+		priv->tx_index = -1;
+		priv->rx_index = i;
+
+		err = avionics_device_register(hi3593->rx[i]);
+		if (err) {
+			pr_err("avionics-hi3592: Failed to register"
+			       " RX %d netdev\n", i);
+			avionics_device_free(hi3593->rx[i]);
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
 static int hi3593_remove(struct spi_device *spi)
 {
 	struct hi3593 *hi3593 = spi_get_drvdata(spi);
+	int i;
 
 	pr_info("avionics-hi3593: Removing Device\n");
+
+	for (i = 0; i < HI3593_NUM_TX; i++) {
+		if (hi3593->tx[i]) {
+			avionics_device_unregister(hi3593->tx[i]);
+			avionics_device_free(hi3593->tx[i]);
+		}
+	}
+
+	for (i = 0; i < HI3593_NUM_RX; i++) {
+		if (hi3593->rx[i]) {
+			avionics_device_unregister(hi3593->rx[i]);
+			avionics_device_free(hi3593->rx[i]);
+		}
+	}
 
 	if (hi3593->reset_gpio > 0) {
 		gpio_set_value(hi3593->reset_gpio, 1);
@@ -294,15 +389,21 @@ static int hi3593_probe(struct spi_device *spi)
 		return err;
 	}
 
-
 	err = hi3593_set_aclk(spi);
 	if (err) {
-		pr_err("avionics-hi3593: Failed to set aclk divider: %d\n",err);
+		pr_err("avionics-hi3593: Failed to set"
+		       " aclk divider: %d\n", err);
 		hi3593_remove(spi);
 		return err;
 	}
 
-	/* TODO: Create net devices */
+	err = hi3593_create_netdevs(spi);
+	if (err) {
+		pr_err("avionics-hi3593: Failed to"
+		       " register netdevs: %d\n", err);
+		hi3593_remove(spi);
+		return err;
+	}
 
 	/* TODO: Setup IRQs */
 
