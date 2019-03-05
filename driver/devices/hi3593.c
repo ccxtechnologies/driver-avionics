@@ -34,6 +34,9 @@ MODULE_VERSION("1.0.0");
 
 #define HI3593_MTU	(32*sizeof(__u32)) /* 32 word FIFO */
 
+#define HI3593_OPCODE_RESET		0x04
+#define HI3593_OPCODE_RD_TX_STATUS	0x80
+
 struct hi3593 {
 	struct net_device *rx[2];
 	struct net_device *tx;
@@ -139,6 +142,8 @@ static int hi3593_probe(struct spi_device *spi)
 {
 	struct device *dev = &spi->dev;
 	struct hi3593 *hi3593;
+	__u8 cmd;
+	ssize_t status;
 	int err;
 
 	pr_info("avionics-hi3593: Adding Device\n");
@@ -152,27 +157,52 @@ static int hi3593_probe(struct spi_device *spi)
 	spi_set_drvdata(spi, hi3593);
 
 	hi3593->reset_gpio = of_get_named_gpio(dev->of_node, "reset-gpio", 0);
-	if (!gpio_is_valid(hi3593->reset_gpio)) {
-		pr_err("avionics-hi3593: Reset GPIO is not valid\n");
-		return -EINVAL;
+	if (hi3593->reset_gpio <= 0 ) {
+		pr_err("avionics-hi3593: Reset GPIO Reset missing/malformed,"
+		       " will use reset command.\n");
+		hi3593->reset_gpio = 0;
+		cmd = HI3593_OPCODE_RESET;
+		err = spi_write(spi, &cmd, 1);
+		if (err < 0) {
+			pr_err("avionics-hi3593: Failed to"
+			       " send reset command\n");
+			return err;
+		}
+
+	} else {
+		if (!gpio_is_valid(hi3593->reset_gpio)) {
+			pr_err("avionics-hi3593: Reset GPIO is not valid\n");
+			return -EINVAL;
+		}
+
+		err = devm_gpio_request_one(&spi->dev, hi3593->reset_gpio,
+					    GPIOF_OUT_INIT_HIGH, "reset");
+		if (err) {
+			pr_err("avionics-hi3593: Failed to"
+			       " register Reset GPIO\n");
+			return err;
+		}
+
+		usleep_range(100, 150);
+		gpio_set_value(hi3593->reset_gpio, 0);
 	}
 
-	err = devm_gpio_request_one(&spi->dev, hi3593->reset_gpio,
-				    GPIOF_OUT_INIT_LOW, "reset");
-	if (err) {
-		pr_err("avionics-hi3593: Failed to register Reset GPIO\n");
-		return err;
+	status = spi_w8r8(spi, HI3593_OPCODE_RD_TX_STATUS);
+	if (status != 0x01) {
+		pr_err("avionics-hi3593: TX FIFO is not cleared: %x\n", status);
+		if (hi3593->reset_gpio) {
+			gpio_set_value(hi3593->reset_gpio, 0);
+			gpio_free(hi3593->reset_gpio);
+		}
+		return -ENODEV;
+	} else {
+		pr_info("avionics-hi3593: Device up\n");
 	}
-
-	usleep_range(100, 150);
-	gpio_set_value(hi3593->reset_gpio, 1);
 
 	/* TODO: Create net devices */
 
 
 	/* TODO: Setup IRQs */
-
-	/* TODO: Reset device */
 
 	of_property_read_u32(dev->of_node, "aclk", &hi3593->aclk);
 	pr_info("avionics-hi3593: Setting ACLK to %dHz\n", hi3593->aclk);
@@ -187,7 +217,10 @@ static int hi3593_remove(struct spi_device *spi)
 
 	pr_info("avionics-hi3593: Removing Device\n");
 
-	gpio_free(hi3593->reset_gpio);
+	if (hi3593->reset_gpio) {
+		gpio_set_value(hi3593->reset_gpio, 0);
+		gpio_free(hi3593->reset_gpio);
+	}
 
 	return 0;
 }
