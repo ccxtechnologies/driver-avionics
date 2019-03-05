@@ -38,6 +38,12 @@ MODULE_VERSION("1.0.0");
 #define HI3593_OPCODE_RD_TX_STATUS	0x80
 #define HI3593_OPCODE_RD_ALCK		0xd4
 #define HI3593_OPCODE_WR_ALCK		0x38
+#define HI3593_OPCODE_RD_RX1_CNTRL	0x94
+#define HI3593_OPCODE_WR_RX1_CNTRL	0x10
+#define HI3593_OPCODE_RD_RX2_CNTRL	0xB4
+#define HI3593_OPCODE_WR_RX2_CNTRL	0x24
+#define HI3593_OPCODE_RD_TX_CNTRL	0x84
+#define HI3593_OPCODE_WR_TX_CNTRL	0x08
 
 #define HI3593_NUM_TX	1
 #define HI3593_NUM_RX	2
@@ -59,24 +65,65 @@ static int hi3593_set_rate(struct avionics_rate *rate,
 			   const struct net_device *dev)
 {
 	struct hi3593_priv *priv;
-	priv = avionics_device_priv(dev);
+	__u8 rd_cmd;
+	__u16 wr_cmd, _wr_cmd;
+	ssize_t status;
+	int err;
 
+	priv = avionics_device_priv(dev);
 	if (!priv) {
 		pr_err("avionics-hi3593: Failed to get private data\n");
 		return -EINVAL;
 	}
 
+	if (priv->tx_index == 0) {
+		rd_cmd = HI3593_OPCODE_RD_TX_CNTRL;
+		wr_cmd = HI3593_OPCODE_WR_TX_CNTRL<<8;
+	} else if (priv->rx_index == 0) {
+		rd_cmd = HI3593_OPCODE_RD_RX1_CNTRL;
+		wr_cmd = HI3593_OPCODE_WR_RX1_CNTRL<<8;
+	} else if (priv->rx_index == 1) {
+		rd_cmd = HI3593_OPCODE_RD_RX2_CNTRL;
+		wr_cmd = HI3593_OPCODE_WR_RX2_CNTRL<<8;
+	} else {
+		pr_err("avionics-hi3593: No valid port index\n");
+		return -EINVAL;
+	}
+
+	status = spi_w8r8(priv->spi, rd_cmd);
+	if (status < 0) {
+		pr_err("avionics-hi3593: Failed to get rate: %d\n", status);
+		return -ENODEV;
+	}
+
 	if(rate->rate_hz == 100000) {
-		pr_info("avionics-hi3593: high-speed\n");
-		/* TODO: Set rate to high */
-
+		wr_cmd += status&0x00f7;
 	} else if(rate->rate_hz == 12500) {
-		pr_info("avionics-hi3593: low-speed\n");
-		/* TODO: Set rate to low */
-
+		wr_cmd += status|0x0001;
 	} else {
 		pr_warn("avionics-hi3593: speed must be 100000 or 12500 Hz\n");
 		return -EINVAL;
+	}
+
+	_wr_cmd = be16_to_cpu(wr_cmd);
+	err = spi_write(priv->spi, &_wr_cmd, 2);
+	if (err < 0) {
+		pr_err("avionics-hi3593: Failed to set rate command\n");
+		return err;
+	}
+
+	status = spi_w8r8(priv->spi, rd_cmd);
+	if (status < 0) {
+		pr_err("avionics-hi3593: Failed to get rate: %d\n", status);
+		return -ENODEV;
+	}
+
+	if (status != (wr_cmd&0x00ff)) {
+		pr_err("avionics-hi3593: Failed to"
+		       " set rate to 0x%x: 0x%x\n", wr_cmd, status);
+		return -ENODEV;
+	} else {
+		pr_info("avionics-hi3593: Set rate to %d\n", rate->rate_hz);
 	}
 
 	return 0;
@@ -86,21 +133,34 @@ static void hi3593_get_rate(struct avionics_rate *rate,
 			     const struct net_device *dev)
 {
 	struct hi3593_priv *priv;
-	__u8 highspeed;
-	priv = avionics_device_priv(dev);
+	__u8 cmd;
+	ssize_t status;
 
+
+	priv = avionics_device_priv(dev);
 	if (!priv) {
 		pr_err("avionics-hi3593: Failed to get private data\n");
 		return;
 	}
 
-	/* TODO: Get rate from device */
-	highspeed = 0;
-
-	if(highspeed) {
-		rate->rate_hz = 100000;
+	if (priv->tx_index == 0) {
+		cmd = HI3593_OPCODE_RD_TX_CNTRL;
+	} else if (priv->rx_index == 0) {
+		cmd = HI3593_OPCODE_RD_RX1_CNTRL;
+	} else if (priv->rx_index == 1) {
+		cmd = HI3593_OPCODE_RD_RX2_CNTRL;
 	} else {
+		pr_err("avionics-hi3593: No valid port index\n");
+		return;
+	}
+
+	status = spi_w8r8(priv->spi, cmd);
+	if (status < 0) {
+		pr_err("avionics-hi3593: Failed to get rate: %d\n", status);
+	} else if(status&0x0001) {
 		rate->rate_hz = 12500;
+	} else {
+		rate->rate_hz = 100000;
 	}
 }
 
@@ -219,7 +279,7 @@ static int hi3593_set_aclk(struct spi_device *spi)
 {
 	struct hi3593 *hi3593 = spi_get_drvdata(spi);
 	int err;
-	__u16 cmd;
+	__u16 cmd, _cmd;
 	ssize_t status;
 
 	if ((hi3593->aclk < 1000000) || (hi3593->aclk > 30000000)) {
@@ -240,7 +300,8 @@ static int hi3593_set_aclk(struct spi_device *spi)
 		cmd = (HI3593_OPCODE_WR_ALCK << 8) + hi3593->aclk/2000000;
 	}
 
-	err = spi_write(spi, &cmd, 2);
+	_cmd = be16_to_cpu(cmd);
+	err = spi_write(spi, &_cmd, 2);
 	if (err < 0) {
 		pr_err("avionics-hi3593: Failed to send aclk set command\n");
 		return err;
