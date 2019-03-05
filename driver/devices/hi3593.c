@@ -36,6 +36,8 @@ MODULE_VERSION("1.0.0");
 
 #define HI3593_OPCODE_RESET		0x04
 #define HI3593_OPCODE_RD_TX_STATUS	0x80
+#define HI3593_OPCODE_RD_ALCK		0xd4
+#define HI3593_OPCODE_WR_ALCK		0x38
 
 struct hi3593 {
 	struct net_device *rx[2];
@@ -138,38 +140,14 @@ static const struct spi_device_id hi3593_spi_device_id[] = {
 };
 MODULE_DEVICE_TABLE(spi, hi3593_spi_device_id);
 
-static int hi3593_probe(struct spi_device *spi)
+static int hi3593_get_config(struct spi_device *spi)
 {
+	struct hi3593 *hi3593 = spi_get_drvdata(spi);
 	struct device *dev = &spi->dev;
-	struct hi3593 *hi3593;
-	__u8 cmd;
-	ssize_t status;
 	int err;
 
-	pr_info("avionics-hi3593: Adding Device\n");
-
-	hi3593 = devm_kzalloc(dev, sizeof(*hi3593), GFP_KERNEL);
-	if (!hi3593) {
-		pr_err("avionics-hi3593: Failed to allocate hi3593 memory\n");
-		return -ENOMEM;
-	}
-
-	spi_set_drvdata(spi, hi3593);
-
 	hi3593->reset_gpio = of_get_named_gpio(dev->of_node, "reset-gpio", 0);
-	if (hi3593->reset_gpio <= 0 ) {
-		pr_err("avionics-hi3593: Reset GPIO Reset missing/malformed,"
-		       " will use reset command.\n");
-		hi3593->reset_gpio = 0;
-		cmd = HI3593_OPCODE_RESET;
-		err = spi_write(spi, &cmd, 1);
-		if (err < 0) {
-			pr_err("avionics-hi3593: Failed to"
-			       " send reset command\n");
-			return err;
-		}
-
-	} else {
+	if (hi3593->reset_gpio > 0 ) {
 		if (!gpio_is_valid(hi3593->reset_gpio)) {
 			pr_err("avionics-hi3593: Reset GPIO is not valid\n");
 			return -EINVAL;
@@ -182,7 +160,38 @@ static int hi3593_probe(struct spi_device *spi)
 			       " register Reset GPIO\n");
 			return err;
 		}
+	}
 
+	err = of_property_read_u32(dev->of_node, "aclk", &hi3593->aclk);
+	if (err) {
+		pr_err("avionics-hi3593: Failed to get aclk"
+		       " frequency from dts: %d\n",err);
+		return err;
+	}
+
+	return 0;
+}
+
+static int hi3593_reset(struct spi_device *spi)
+{
+	struct hi3593 *hi3593 = spi_get_drvdata(spi);
+	__u8 opcode;
+	ssize_t status;
+	int err;
+
+	if (hi3593->reset_gpio <= 0 ) {
+		pr_err("avionics-hi3593: Reset GPIO Reset missing/malformed,"
+		       " will use reset command.\n");
+		hi3593->reset_gpio = 0;
+		opcode = HI3593_OPCODE_RESET;
+		err = spi_write(spi, &opcode, 1);
+		if (err < 0) {
+			pr_err("avionics-hi3593: Failed to"
+			       " send reset command\n");
+			return err;
+		}
+
+	} else {
 		usleep_range(100, 150);
 		gpio_set_value(hi3593->reset_gpio, 0);
 	}
@@ -190,23 +199,52 @@ static int hi3593_probe(struct spi_device *spi)
 	status = spi_w8r8(spi, HI3593_OPCODE_RD_TX_STATUS);
 	if (status != 0x01) {
 		pr_err("avionics-hi3593: TX FIFO is not cleared: %x\n", status);
-		if (hi3593->reset_gpio) {
-			gpio_set_value(hi3593->reset_gpio, 0);
-			gpio_free(hi3593->reset_gpio);
-		}
 		return -ENODEV;
-	} else {
-		pr_info("avionics-hi3593: Device up\n");
 	}
 
-	/* TODO: Create net devices */
+	pr_info("avionics-hi3593: Device up\n");
+	return 0;
+}
 
+static int hi3593_set_aclk(struct spi_device *spi)
+{
+	struct hi3593 *hi3593 = spi_get_drvdata(spi);
+	int err;
+	__u16 cmd;
+	ssize_t status;
 
-	/* TODO: Setup IRQs */
+	if ((hi3593->aclk < 1000000) || (hi3593->aclk > 30000000)) {
+		pr_err("avionics-hi3593: aclk must be between"
+		       " 1000000 and 30000000 (1MHz - 30MHz)\n");
+		return -EINVAL;
+	}
 
-	of_property_read_u32(dev->of_node, "aclk", &hi3593->aclk);
-	pr_info("avionics-hi3593: Setting ACLK to %dHz\n", hi3593->aclk);
-	/* TODO: Configure ACLK */
+	if ((hi3593->aclk != 1000000) && (hi3593->aclk % 2000000)) {
+		pr_err("avionics-hi3593: aclk must be either 1000000"
+		       " or a multiple of 2000000\n");
+		return -EINVAL;
+	}
+
+	if (hi3593->aclk == 1000000) {
+		cmd = HI3593_OPCODE_WR_ALCK << 8;
+	} else {
+		cmd = (HI3593_OPCODE_WR_ALCK << 8) + hi3593->aclk/2000000;
+	}
+
+	err = spi_write(spi, &cmd, 2);
+	if (err < 0) {
+		pr_err("avionics-hi3593: Failed to send aclk set command\n");
+		return err;
+	}
+
+	status = spi_w8r8(spi, HI3593_OPCODE_RD_ALCK);
+	if (status != (cmd&0x00ff)) {
+		pr_err("avionics-hi3593: ALCK not set to 0x%x: 0x%x\n",
+		       (cmd&0x00ff), status);
+		return -ENODEV;
+	}
+
+	pr_info("avionics-hi3593: ALCK set to 0x%x\n", status);
 
 	return 0;
 }
@@ -217,10 +255,56 @@ static int hi3593_remove(struct spi_device *spi)
 
 	pr_info("avionics-hi3593: Removing Device\n");
 
-	if (hi3593->reset_gpio) {
-		gpio_set_value(hi3593->reset_gpio, 0);
+	if (hi3593->reset_gpio > 0) {
+		gpio_set_value(hi3593->reset_gpio, 1);
 		gpio_free(hi3593->reset_gpio);
 	}
+
+	return 0;
+}
+
+static int hi3593_probe(struct spi_device *spi)
+{
+	struct hi3593 *hi3593;
+	struct device *dev = &spi->dev;
+	int err;
+
+	pr_info("avionics-hi3593: Adding Device\n");
+
+	hi3593 = devm_kzalloc(dev, sizeof(*hi3593), GFP_KERNEL);
+	if (!hi3593) {
+		pr_err("avionics-hi3593: Failed to allocate hi3593 memory\n");
+		return -ENOMEM;
+	}
+	spi_set_drvdata(spi, hi3593);
+
+	err = hi3593_get_config(spi);
+	if (err) {
+		pr_err("avionics-hi3593: Failed to get system configuration"
+		       " from dts file: %d\n",err);
+		hi3593_remove(spi);
+		return err;
+	}
+
+	err = hi3593_reset(spi);
+	if (err) {
+		pr_err("avionics-hi3593: Failed to bring device"
+		       " out of reset: %d\n",err);
+		hi3593_remove(spi);
+		return err;
+	}
+
+
+	err = hi3593_set_aclk(spi);
+	if (err) {
+		pr_err("avionics-hi3593: Failed to set aclk divider: %d\n",err);
+		hi3593_remove(spi);
+		return err;
+	}
+
+	/* TODO: Create net devices */
+
+	/* TODO: Setup IRQs */
 
 	return 0;
 }
