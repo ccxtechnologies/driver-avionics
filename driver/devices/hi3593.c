@@ -43,6 +43,10 @@ MODULE_VERSION("1.0.0");
 #define HI3593_OPCODE_RD_RX2_CNTRL	0xB4
 #define HI3593_OPCODE_RD_TX_CNTRL	0x84
 
+#define HI3593_OPCODE_RD_RX1_STATUS	0x90
+#define HI3593_OPCODE_RD_RX2_STATUS	0xb0
+#define HI3593_OPCODE_RD_TX_STATUS	0x80
+
 #define HI3593_OPCODE_WR_RX1_CNTRL	0x10
 #define HI3593_OPCODE_WR_RX2_CNTRL	0x24
 #define HI3593_OPCODE_WR_TX_CNTRL	0x08
@@ -57,7 +61,14 @@ MODULE_VERSION("1.0.0");
 #define HI3593_OPCODE_WR_RX1_FILTERS	0x14
 #define HI3593_OPCODE_WR_RX2_FILTERS	0x2c
 
+#define HI3593_OPCODE_WR_TX_FIFO	0x0c
+#define HI3593_OPCODE_WR_TX_SEND	0x40
+
 #define AVIONICS_ARINC429TX_HIZ		(1<<7)
+
+#define HI3593_FIFO_FULL	0x04
+#define HI3593_FIFO_HALF	0x02
+#define HI3593_FIFO_EMPTY	0x01
 
 #define HI3593_NUM_TX	1
 #define HI3593_NUM_RX	2
@@ -67,12 +78,18 @@ struct hi3593 {
 	struct net_device *tx[HI3593_NUM_TX];
 	int reset_gpio;
 	__u32 aclk;
+	struct mutex lock;
 };
 
 struct hi3593_priv {
+	struct net_device *dev;
 	struct spi_device *spi;
+	struct sk_buff_head skbq;
 	int tx_index;
 	int rx_index;
+	struct mutex *lock;
+	struct workqueue_struct *wq;
+	struct work_struct worker;
 };
 
 static ssize_t hi3593_get_cntrl(struct hi3593_priv *priv)
@@ -99,9 +116,12 @@ static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 	__u8 wr_cmd[2];
 	int err;
 
+	mutex_lock(priv->lock);
+
 	status = hi3593_get_cntrl(priv);
 	if (status < 0) {
 		pr_err("avionics-hi3593: Failed to read control: %d\n", status);
+		mutex_unlock(priv->lock);
 		return -ENODEV;
 	}
 
@@ -113,6 +133,7 @@ static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 		wr_cmd[0] = HI3593_OPCODE_WR_RX2_CNTRL;
 	} else {
 		pr_err("avionics-hi3593: No valid port index\n");
+		mutex_unlock(priv->lock);
 		return -EINVAL;
 	}
 
@@ -120,21 +141,25 @@ static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 	err = spi_write(priv->spi, wr_cmd, sizeof(wr_cmd));
 	if (err < 0) {
 		pr_err("avionics-hi3593: Failed to set control\n");
+		mutex_unlock(priv->lock);
 		return err;
 	}
 
 	status = hi3593_get_cntrl(priv);
 	if (status < 0) {
 		pr_err("avionics-hi3593: Failed to read control: %d\n", status);
+		mutex_unlock(priv->lock);
 		return -ENODEV;
 	}
 
 	if ((status&mask) != (value&mask)) {
 		pr_err("avionics-hi3593: Failed to set"
 		       " control to 0x%x & 0x%x : 0x%x\n", value, mask, status);
+		mutex_unlock(priv->lock);
 		return -ENODEV;
 	}
 
+	mutex_unlock(priv->lock);
 	return 0;
 }
 
@@ -170,7 +195,7 @@ static int hi3593_set_rate(struct avionics_rate *rate,
 }
 
 static void hi3593_get_rate(struct avionics_rate *rate,
-			     const struct net_device *dev)
+			    const struct net_device *dev)
 {
 	struct hi3593_priv *priv;
 	ssize_t status;
@@ -192,7 +217,7 @@ static void hi3593_get_rate(struct avionics_rate *rate,
 }
 
 static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
-				   const struct net_device *dev)
+				  const struct net_device *dev)
 {
 	struct hi3593_priv *priv;
 	__u8 rd_priority, rd_filters;
@@ -239,7 +264,7 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 }
 
 static int hi3593_set_arinc429rx(struct avionics_arinc429rx *config,
-				   const struct net_device *dev)
+				 const struct net_device *dev)
 {
 	struct hi3593_priv *priv;
 	__u8 wr_priority[4], wr_filters[33];
@@ -286,7 +311,7 @@ static int hi3593_set_arinc429rx(struct avionics_arinc429rx *config,
 }
 
 static void hi3593_get_arinc429tx(struct avionics_arinc429tx *config,
-				   const struct net_device *dev)
+				  const struct net_device *dev)
 {
 	struct hi3593_priv *priv;
 	ssize_t status;
@@ -372,6 +397,8 @@ static int hi3593_tx_open(struct net_device *dev)
 		return err;
 	}
 
+	netif_wake_queue(dev);
+
 	return 0;
 }
 
@@ -382,11 +409,16 @@ static int hi3593_tx_stop(struct net_device *dev)
 
 	pr_warn("avionics-hi3593: Disabling Driver\n");
 
+	netif_stop_queue(dev);
+
 	priv = avionics_device_priv(dev);
 	if (!priv) {
 		pr_err("avionics-hi3593: Failed to get private data\n");
 		return -EINVAL;
 	}
+
+	skb_queue_purge(&priv->skbq);
+	flush_workqueue(priv->wq);
 
 	err = hi3593_set_cntrl(priv, AVIONICS_ARINC429TX_HIZ,
 			       AVIONICS_ARINC429TX_HIZ);
@@ -398,10 +430,123 @@ static int hi3593_tx_stop(struct net_device *dev)
 	return 0;
 }
 
+static void hi3593_tx_worker(struct work_struct *work)
+{
+	struct net_device *dev;
+	struct net_device_stats *stats;
+	struct hi3593_priv *priv;
+	struct sk_buff *skb;
+	__u8 rd_cmd, wr_cmd[5], send_cmd;
+	ssize_t status;
+	int err, i;
+
+	priv = container_of(work, struct hi3593_priv, worker);
+	dev = priv->dev;
+	stats = &dev->stats;
+
+	priv = avionics_device_priv(dev);
+	if (!priv) {
+		pr_err("avionics-hi3593: Failed to get private data\n");
+		return;
+	}
+
+	if (priv->tx_index == 0) {
+		rd_cmd = HI3593_OPCODE_RD_TX_STATUS;
+	} else {
+		pr_err("avionics-hi3593: No valid port index\n");
+		return;
+	}
+
+	skb = skb_dequeue(&priv->skbq);
+	if (!skb) {
+		return;
+	}
+
+	mutex_lock(priv->lock);
+
+	status = spi_w8r8(priv->spi, rd_cmd);
+	if ((status & HI3593_FIFO_FULL) ||
+	    ((skb->len > (1*sizeof(__u32))) &&
+	     (status & HI3593_FIFO_HALF)) ||
+	    ((skb->len > (16*sizeof(__u32))) &&
+	     !(status & HI3593_FIFO_EMPTY))) {
+		/* TODO: Come up with a better dropping algo. */
+		kfree_skb(skb);
+		stats->tx_dropped++;
+		mutex_unlock(priv->lock);
+		return;
+	}
+
+	wr_cmd[0] = HI3593_OPCODE_WR_TX_FIFO;
+	for (i = 0; i < skb->len; i = i + sizeof(__u32)) {
+		memcpy(&wr_cmd[1], &skb->data[i], sizeof(__u32));
+		err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
+		if (err < 0) {
+			pr_err("avionics-hi3593: Failed to load fifo\n");
+			mutex_unlock(priv->lock);
+			return;
+		}
+	}
+
+	send_cmd = HI3593_OPCODE_WR_TX_SEND;
+	err = spi_write(priv->spi, &send_cmd, sizeof(send_cmd));
+	if (err < 0) {
+		pr_err("avionics-hi3593: Failed to send transmit command\n");
+		mutex_unlock(priv->lock);
+		return;
+	}
+
+	mutex_unlock(priv->lock);
+
+	stats->tx_packets++;
+	stats->tx_bytes += skb->len;
+
+	consume_skb(skb);
+}
+
+static netdev_tx_t hi3593_tx_start_xmit(struct sk_buff *skb,
+					struct net_device *dev)
+{
+	struct net_device_stats *stats = &dev->stats;
+	struct hi3593_priv *priv;
+
+	if (skb->protocol != htons(ETH_P_AVIONICS)) {
+		kfree_skb(skb);
+		stats->tx_dropped++;
+		return NETDEV_TX_OK;
+	}
+
+	if (unlikely(skb->len > HI3593_MTU)) {
+		kfree_skb(skb);
+		stats->tx_dropped++;
+		return NETDEV_TX_OK;
+	}
+
+	if (unlikely(skb->len % 4)) {
+		kfree_skb(skb);
+		stats->tx_dropped++;
+		return NETDEV_TX_OK;
+	}
+
+	priv = avionics_device_priv(dev);
+	if (!priv) {
+		pr_err("avionics-hi3593: Failed to get private data\n");
+		kfree_skb(skb);
+		stats->tx_dropped++;
+		return NETDEV_TX_OK;
+	}
+
+	skb_queue_tail(&priv->skbq, skb);
+	queue_work(priv->wq, &priv->worker);
+
+	return NETDEV_TX_OK;
+}
+
 static const struct net_device_ops hi3593_tx_netdev_ops = {
 	.ndo_change_mtu = hi3593_change_mtu,
 	.ndo_open = hi3593_tx_open,
 	.ndo_stop = hi3593_tx_stop,
+	.ndo_start_xmit = hi3593_tx_start_xmit,
 };
 
 static const struct net_device_ops hi3593_rx_netdev_ops = {
@@ -574,9 +719,21 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 			       " for TX %d\n", i);
 			return -EINVAL;
 		}
+		priv->dev = hi3593->tx[i];
 		priv->spi = spi;
+		priv->lock = &hi3593->lock;
 		priv->tx_index = i;
 		priv->rx_index = -1;
+		skb_queue_head_init(&priv->skbq);
+		priv->wq = alloc_workqueue("hi3593-tx-%d",
+					   WQ_FREEZABLE | WQ_MEM_RECLAIM, 0, i);
+		if (!priv->wq) {
+			pr_err("avionics-hi3593: Failed to allocate"
+			       " tx work-queue %d\n", i);
+			return -ENOMEM;
+		}
+
+		INIT_WORK(&priv->worker, hi3593_tx_worker);
 
 		err = avionics_device_register(hi3593->tx[i]);
 		if (err) {
@@ -614,10 +771,19 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 			       " for RX %d\n", i);
 			return -EINVAL;
 		}
+		priv->dev = hi3593->rx[i];
 		priv->spi = spi;
+		priv->lock = &hi3593->lock;
 		priv->tx_index = -1;
 		priv->rx_index = i;
-
+		skb_queue_head_init(&priv->skbq);
+		priv->wq = alloc_workqueue("hi3593-rx-%d",
+					   WQ_FREEZABLE | WQ_MEM_RECLAIM, 0, i);
+		if (!priv->wq) {
+			pr_err("avionics-hi3593: Failed to allocate"
+			       " rx work-queue %d\n", i);
+			return -ENOMEM;
+		}
 		err = avionics_device_register(hi3593->rx[i]);
 		if (err) {
 			pr_err("avionics-hi3593: Failed to register"
@@ -642,6 +808,7 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 static int hi3593_remove(struct spi_device *spi)
 {
 	struct hi3593 *hi3593 = spi_get_drvdata(spi);
+	struct hi3593_priv *priv;
 	int i;
 
 	pr_info("avionics-hi3593: Removing Device\n");
@@ -650,6 +817,11 @@ static int hi3593_remove(struct spi_device *spi)
 		if (hi3593->tx[i]) {
 			avionics_device_unregister(hi3593->tx[i]);
 			avionics_device_free(hi3593->tx[i]);
+			priv = avionics_device_priv(hi3593->tx[i]);
+			if (priv) {
+				skb_queue_purge(&priv->skbq);
+				destroy_workqueue(priv->wq);
+			}
 		}
 	}
 
@@ -657,6 +829,11 @@ static int hi3593_remove(struct spi_device *spi)
 		if (hi3593->rx[i]) {
 			avionics_device_unregister(hi3593->rx[i]);
 			avionics_device_free(hi3593->rx[i]);
+			priv = avionics_device_priv(hi3593->rx[i]);
+			if (priv) {
+				skb_queue_purge(&priv->skbq);
+				destroy_workqueue(priv->wq);
+			}
 		}
 	}
 
@@ -682,6 +859,7 @@ static int hi3593_probe(struct spi_device *spi)
 		return -ENOMEM;
 	}
 	spi_set_drvdata(spi, hi3593);
+	mutex_init(&hi3593->lock);
 
 	err = hi3593_get_config(spi);
 	if (err) {

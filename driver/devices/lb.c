@@ -52,22 +52,22 @@ static void lb_rx(struct sk_buff *skb_xmit, struct net_device *dev)
 }
 
 static netdev_tx_t lb_start_xmit(struct sk_buff *skb,
-					struct net_device *dev)
+				 struct net_device *dev)
 {
 	struct net_device_stats *stats = &dev->stats;
 
 	pr_debug("avionics-lb: TX Packet\n");
 
 	if (skb->protocol != htons(ETH_P_AVIONICS)) {
-	    kfree_skb(skb);
-	    dev->stats.tx_dropped++;
-	    return NETDEV_TX_OK;
+		kfree_skb(skb);
+		dev->stats.tx_dropped++;
+		return NETDEV_TX_OK;
 	}
 
 	if (unlikely(skb->len % sizeof(__u32))) {
-	    kfree_skb(skb);
-	    dev->stats.tx_dropped++;
-	    return NETDEV_TX_OK;
+		kfree_skb(skb);
+		dev->stats.tx_dropped++;
+		return NETDEV_TX_OK;
 	}
 
 	stats->tx_packets++;
