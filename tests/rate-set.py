@@ -48,7 +48,6 @@ def get_index(device):
         data = struct.pack("16si", device.encode(), 0)
         res = fcntl.ioctl(sock, SIOCGIFINDEX, data)
         index, = struct.unpack("16xi", res)
-        print(f"Device {device} index is {index}.")
         return index
 
 class CStruct:
@@ -71,12 +70,12 @@ class CStruct:
 
 nlmsghdr = CStruct("nlmsghdr", "=LHHLL", ("nlmsg_len", "nlmsg_type", "nlmsg_flags", "nlmsg_seq", "nlmsg_pid"))
 nlmsgerr = CStruct("nlmsgerr", "=i", ("error"))
-ifinfomsg = CStruct("ifinfomsg", "=BBHiII", ("ifi_family", "ifi_padding", "ifi_type","ifi_index", "ifi_flags", "ifi_change"))
+ifinfomsg = CStruct("ifinfomsg", "=BxHiII", ("ifi_family", "ifi_type","ifi_index", "ifi_flags", "ifi_change"))
 rattr = CStruct("rattr", "=HH", ("rta_len", "rta_type"))
 
 avionics_rate = CStruct("avionics_rate", "=L", ("rate_hz"))
 
-def setlink(rate):
+def set_rate(rate):
     with socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE) as sock:
         sock.bind((os.getpid(), 0))
 
@@ -92,7 +91,7 @@ def setlink(rate):
         command = rattr.pack(len(rattr) + len(info_kind) + len(info_data), IFLA_LINKINFO) + info_kind + info_data
 
         msg = (nlmsghdr.pack(len(nlmsghdr) + len(ifinfomsg) + len(command), RTM_NEWLINK, NLM_F_REQUEST | NLM_F_ACK, 0, 0) +
-                ifinfomsg.pack(0, 0, 0, index, IFF_UP, IFF_UP) + command)
+                ifinfomsg.pack(0, 0, index, IFF_UP, IFF_UP) + command)
 
         sock.send(msg)
 
@@ -102,8 +101,6 @@ def setlink(rate):
 
             msg, msghdr = nlmsghdr.consume(msg)
 
-            print(msghdr)
-
             if msghdr.nlmsg_len != msg_len:
                 print(f"Message truncated! {msghdr.nlmsg_len} != {len(msg)}")
                 return
@@ -111,19 +108,12 @@ def setlink(rate):
             if msghdr.nlmsg_type == NLMSG_ERROR:
                 msg, msgerr = nlmsgerr.consume(msg)
                 msg, msgerrhdr = nlmsghdr.consume(msg)
-
-                print(f"Error: {msgerr} from {msgerrhdr}")
-
+                if msgerr.error:
+                    print(f"Error: {msgerr} from {msgerrhdr}")
                 return
-
-            msg, msgifinfo = ifinfomsg.consume(msg)
-
-            print(msgifinfo)
-
-            return msg
 
 if __name__ == "__main__":
 
-    msg = setlink(int(sys.argv[2]))
-
-    print(msg)
+    rate = int(sys.argv[2])
+    set_rate(rate)
+    print(f"Rate set to {rate}")

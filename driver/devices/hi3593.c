@@ -52,6 +52,11 @@ MODULE_VERSION("1.0.0");
 #define HI3593_OPCODE_RD_RX1_FILTERS	0x98
 #define HI3593_OPCODE_RD_RX2_FILTERS	0xb8
 
+#define HI3593_OPCODE_WR_RX1_PRIORITY	0x18
+#define HI3593_OPCODE_WR_RX2_PRIORITY	0x2c
+#define HI3593_OPCODE_WR_RX1_FILTERS	0x14
+#define HI3593_OPCODE_WR_RX2_FILTERS	0x2c
+
 #define HI3593_NUM_TX	1
 #define HI3593_NUM_RX	2
 
@@ -72,8 +77,7 @@ static int hi3593_set_rate(struct avionics_rate *rate,
 			   const struct net_device *dev)
 {
 	struct hi3593_priv *priv;
-	__u8 rd_cmd;
-	__u16 wr_cmd, _wr_cmd;
+	__u8 rd_cmd, wr_cmd[2];
 	ssize_t status;
 	int err;
 
@@ -85,13 +89,13 @@ static int hi3593_set_rate(struct avionics_rate *rate,
 
 	if (priv->tx_index == 0) {
 		rd_cmd = HI3593_OPCODE_RD_TX_CNTRL;
-		wr_cmd = HI3593_OPCODE_WR_TX_CNTRL<<8;
+		wr_cmd[0] = HI3593_OPCODE_WR_TX_CNTRL;
 	} else if (priv->rx_index == 0) {
 		rd_cmd = HI3593_OPCODE_RD_RX1_CNTRL;
-		wr_cmd = HI3593_OPCODE_WR_RX1_CNTRL<<8;
+		wr_cmd[0] = HI3593_OPCODE_WR_RX1_CNTRL;
 	} else if (priv->rx_index == 1) {
 		rd_cmd = HI3593_OPCODE_RD_RX2_CNTRL;
-		wr_cmd = HI3593_OPCODE_WR_RX2_CNTRL<<8;
+		wr_cmd[0] = HI3593_OPCODE_WR_RX2_CNTRL;
 	} else {
 		pr_err("avionics-hi3593: No valid port index\n");
 		return -EINVAL;
@@ -104,16 +108,15 @@ static int hi3593_set_rate(struct avionics_rate *rate,
 	}
 
 	if(rate->rate_hz == 100000) {
-		wr_cmd += status&0x00f7;
+		wr_cmd[1] = status&0x00f7;
 	} else if(rate->rate_hz == 12500) {
-		wr_cmd += status|0x0001;
+		wr_cmd[1] = status|0x0001;
 	} else {
 		pr_warn("avionics-hi3593: speed must be 100000 or 12500 Hz\n");
 		return -EINVAL;
 	}
 
-	_wr_cmd = be16_to_cpu(wr_cmd);
-	err = spi_write(priv->spi, &_wr_cmd, 2);
+	err = spi_write(priv->spi, wr_cmd, sizeof(wr_cmd));
 	if (err < 0) {
 		pr_err("avionics-hi3593: Failed to set rate command\n");
 		return err;
@@ -125,9 +128,9 @@ static int hi3593_set_rate(struct avionics_rate *rate,
 		return -ENODEV;
 	}
 
-	if (status != (wr_cmd&0x00ff)) {
+	if (status != wr_cmd[1]) {
 		pr_err("avionics-hi3593: Failed to"
-		       " set rate to 0x%x: 0x%x\n", wr_cmd, status);
+		       " set rate to 0x%x: 0x%x\n", wr_cmd[1], status);
 		return -ENODEV;
 	} else {
 		pr_info("avionics-hi3593: Set rate to %d\n", rate->rate_hz);
@@ -176,6 +179,7 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 	struct hi3593_priv *priv;
 	__u8 rd_cntrl, rd_priority, rd_filters;
 	ssize_t status;
+	int err;
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
@@ -196,13 +200,85 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 		return;
 	}
 
-	status = spi_w8r8(priv->spi, &config->flags);
+	status = spi_w8r8(priv->spi, rd_cntrl);
 	if (status < 0) {
 		pr_err("avionics-hi3593: Failed to get rx cntrl: %d\n", status);
+	} else {
+		config->flags = status;
 	}
 
-	/* TODO: Read priority filters */
-	/* TODO: Read label filters */
+	err = spi_write_then_read(priv->spi, &rd_priority, sizeof(rd_priority),
+				  &config->priority_labels, 3);
+	if (err) {
+		pr_err("avionics-hi3593: Failed to get rx priorty labels: %d\n",
+		       err);
+	}
+
+	err = spi_write_then_read(priv->spi, &rd_filters, sizeof(rd_priority),
+				  &config->label_filers, 32);
+	if (err) {
+		pr_err("avionics-hi3593: Failed to get rx label filters: %d\n",
+		       err);
+	}
+}
+
+static int hi3593_set_arinc429rx(struct avionics_arinc429rx *config,
+				   const struct net_device *dev)
+{
+	struct hi3593_priv *priv;
+	__u8 rd_cntrl, wr_cntrl[2], wr_priority[4], wr_filters[33];
+	ssize_t status;
+	int err;
+
+	priv = avionics_device_priv(dev);
+	if (!priv) {
+		pr_err("avionics-hi3593: Failed to get private data\n");
+		return -ENODEV;
+	}
+
+	if (priv->rx_index == 0) {
+		rd_cntrl = HI3593_OPCODE_RD_RX1_CNTRL;
+		wr_cntrl[0] = HI3593_OPCODE_WR_RX1_CNTRL;
+		wr_priority[0] = HI3593_OPCODE_WR_RX1_PRIORITY;
+		wr_filters[0] = HI3593_OPCODE_WR_RX1_FILTERS;
+	} else if (priv->rx_index == 1) {
+		rd_cntrl = HI3593_OPCODE_RD_RX2_CNTRL;
+		wr_cntrl[0] = HI3593_OPCODE_WR_RX2_CNTRL;
+		wr_priority[0] = HI3593_OPCODE_WR_RX2_PRIORITY;
+		wr_filters[0] = HI3593_OPCODE_WR_RX2_FILTERS;
+	} else {
+		pr_err("avionics-hi3593: No valid rx port index\n");
+		return -EINVAL;
+	}
+
+	status = spi_w8r8(priv->spi, rd_cntrl);
+	if (status < 0) {
+		pr_err("avionics-hi3593: Failed to get rx cntrl: %d\n", status);
+		return -ENODEV;
+	}
+
+	wr_cntrl[1] = (config->flags&0xfe) | (status&0x01);
+	err = spi_write(priv->spi, &wr_cntrl, sizeof(wr_cntrl));
+	if (err < 0) {
+		pr_err("avionics-hi3593: Failed to set status.\n");
+		return err;
+	}
+
+	memcpy(&wr_priority[1], &config->priority_labels, 3);
+	err = spi_write(priv->spi, &wr_priority, sizeof(wr_priority));
+	if (err < 0) {
+		pr_err("avionics-hi3593: Failed to set priority.\n");
+		return err;
+	}
+
+	memcpy(&wr_filters[1], &config->label_filers, 32);
+	err = spi_write(priv->spi, &wr_filters, sizeof(wr_filters));
+	if (err < 0) {
+		pr_err("avionics-hi3593: Failed to set priority.\n");
+		return err;
+	}
+
+	return 0;
 }
 
 static struct avionics_ops hi3593_arinc429rx_ops = {
@@ -210,7 +286,7 @@ static struct avionics_ops hi3593_arinc429rx_ops = {
 	.set_rate = hi3593_set_rate,
 	.get_rate = hi3593_get_rate,
 	.get_arinc429rx = hi3593_get_arinc429rx,
-	/* TODO: Add Configuration routines */
+	.set_arinc429rx = hi3593_set_arinc429rx,
 };
 
 static struct avionics_ops hi3593_arinc429tx_ops = {
@@ -293,7 +369,7 @@ static int hi3593_reset(struct spi_device *spi)
 		       " will use reset command.\n");
 		hi3593->reset_gpio = 0;
 		opcode = HI3593_OPCODE_RESET;
-		err = spi_write(spi, &opcode, 1);
+		err = spi_write(spi, &opcode, sizeof(opcode));
 		if (err < 0) {
 			pr_err("avionics-hi3593: Failed to"
 			       " send reset command\n");
@@ -319,7 +395,7 @@ static int hi3593_set_aclk(struct spi_device *spi)
 {
 	struct hi3593 *hi3593 = spi_get_drvdata(spi);
 	int err;
-	__u16 cmd, _cmd;
+	__u8 cmd[2];
 	ssize_t status;
 
 	if ((hi3593->aclk < 1000000) || (hi3593->aclk > 30000000)) {
@@ -334,23 +410,23 @@ static int hi3593_set_aclk(struct spi_device *spi)
 		return -EINVAL;
 	}
 
+	cmd[0] = HI3593_OPCODE_WR_ALCK;
 	if (hi3593->aclk == 1000000) {
-		cmd = HI3593_OPCODE_WR_ALCK << 8;
+		cmd[1] = 0x00;
 	} else {
-		cmd = (HI3593_OPCODE_WR_ALCK << 8) + hi3593->aclk/2000000;
+		cmd[1] = hi3593->aclk/2000000;
 	}
 
-	_cmd = be16_to_cpu(cmd);
-	err = spi_write(spi, &_cmd, 2);
+	err = spi_write(spi, &cmd, sizeof(cmd));
 	if (err < 0) {
 		pr_err("avionics-hi3593: Failed to send aclk set command\n");
 		return err;
 	}
 
 	status = spi_w8r8(spi, HI3593_OPCODE_RD_ALCK);
-	if (status != (cmd&0x00ff)) {
+	if (status != cmd[1]) {
 		pr_err("avionics-hi3593: ALCK not set to 0x%x: 0x%x\n",
-		       (cmd&0x00ff), status);
+		       cmd[1], status);
 		return -ENODEV;
 	}
 
@@ -358,6 +434,17 @@ static int hi3593_set_aclk(struct spi_device *spi)
 
 	return 0;
 }
+
+static struct avionics_arinc429rx avionics_arinc429rx_default = {
+	.flags = (AVIONICS_ARINC429RX_FLIP_LABEL_BITS |
+		  AVIONICS_ARINC429RX_PARITY_CHECK),
+	.priority_labels = {0,0,0},
+	.label_filers = {0,0,0,0,0,0,0,0,
+		0,0,0,0,0,0,0,0,
+		0,0,0,0,0,0,0,0,
+		0,0,0,0,0,0,0,0},
+};
+
 
 static int hi3593_create_netdevs(struct spi_device *spi)
 {
@@ -420,8 +507,17 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 
 		err = avionics_device_register(hi3593->rx[i]);
 		if (err) {
-			pr_err("avionics-hi3592: Failed to register"
+			pr_err("avionics-hi3593: Failed to register"
 			       " RX %d netdev\n", i);
+			avionics_device_free(hi3593->rx[i]);
+			return -EINVAL;
+		}
+
+		err = hi3593_set_arinc429rx(&avionics_arinc429rx_default,
+					    hi3593->rx[i]);
+		if (err) {
+			pr_err("avionics-hi3593: Failed to set RX %d"
+			       " default settings\n", i);
 			avionics_device_free(hi3593->rx[i]);
 			return -EINVAL;
 		}

@@ -33,6 +33,16 @@ IFLA_INFO_DATA = 2
 
 # from avionics.h
 IFLA_AVIONICS_RATE = 1
+IFLA_AVIONICS_ARINC429RX = 2
+IFLA_AVIONICS_ARINC429TX = 3
+
+AVIONICS_ARINC429RX_FLIP_LABEL_BITS = (1<<7)
+AVIONICS_ARINC429RX_SD9_MASK = (1<<6)
+AVIONICS_ARINC429RX_SD10_MASK = (1<<5)
+AVIONICS_ARINC429RX_SD_MASK_ENABLE = (1<<4)
+AVIONICS_ARINC429RX_PARITY_CHECK = (1<<3)
+AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE = (1<<2)
+AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE = (1<<1)
 
 device = sys.argv[1]
 
@@ -66,6 +76,7 @@ ifinfomsg = CStruct("ifinfomsg", "=BxHiII", ("ifi_family", "ifi_type","ifi_index
 rattr = CStruct("rattr", "=HH", ("rta_len", "rta_type"))
 
 avionics_rate = CStruct("avionics_rate", "=L", ("rate_hz"))
+avionics_arinc429rx = CStruct("avionics_arinc429rx", "=Bx3s32s", ("flags", "priority_labels", "label_filters"))
 
 def parse_rtattr(msg):
     attrs = {}
@@ -126,4 +137,13 @@ if __name__ == "__main__":
     link_data = parse_rtattr(link_info[IFLA_INFO_DATA])
 
     rate = avionics_rate.unpack(link_data[IFLA_AVIONICS_RATE])
-    print(rate)
+    print(f"Rate = {rate.rate_hz} Hz")
+
+    config = avionics_arinc429rx.unpack(link_data[IFLA_AVIONICS_ARINC429RX])
+    print(f"Flip Label Bits = {bool(config.flags&AVIONICS_ARINC429RX_FLIP_LABEL_BITS)}")
+    print(f"SD9 Mask = {bool(config.flags&AVIONICS_ARINC429RX_SD9_MASK)}")
+    print(f"SD10 Mask = {bool(config.flags&AVIONICS_ARINC429RX_SD10_MASK)}")
+    print(f"SD Mask Enable = {bool(config.flags&AVIONICS_ARINC429RX_SD_MASK_ENABLE)}")
+    print(f"Parity Check Enabled = {bool(config.flags&AVIONICS_ARINC429RX_PARITY_CHECK)}")
+    print(f"Label Filter Enabled = {bool(config.flags&AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE)}")
+    print(f"Priority Labels Enabled = {bool(config.flags&AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE)}")
