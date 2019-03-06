@@ -77,6 +77,7 @@ struct hi3593 {
 	struct net_device *rx[HI3593_NUM_RX];
 	struct net_device *tx[HI3593_NUM_TX];
 	int reset_gpio;
+	int irq[2];
 	__u32 aclk;
 	struct mutex lock;
 };
@@ -572,7 +573,7 @@ static int hi3593_get_config(struct spi_device *spi)
 {
 	struct hi3593 *hi3593 = spi_get_drvdata(spi);
 	struct device *dev = &spi->dev;
-	int err;
+	int err, i;
 
 	hi3593->reset_gpio = of_get_named_gpio(dev->of_node, "reset-gpio", 0);
 	if (hi3593->reset_gpio > 0 ) {
@@ -595,6 +596,15 @@ static int hi3593_get_config(struct spi_device *spi)
 		pr_err("avionics-hi3593: Failed to get aclk"
 		       " frequency from dts: %d\n",err);
 		return err;
+	}
+
+	for (i = 0; i < HI3593_NUM_RX; i++) {
+		hi3593->irq[i] = irq_of_parse_and_map(dev->of_node, i);
+		if (hi3593->irq[i] < 0) {
+			pr_err("avionics-hi3593: Failed to"
+			       " get irq %d: %d\n", i, hi3593->irq[i]);
+			return hi3593->irq[i];
+		}
 	}
 
 	return 0;
@@ -693,7 +703,6 @@ static struct avionics_arinc429tx avionics_arinc429tx_default = {
 		  AVIONICS_ARINC429TX_PARITY_SET |
 		  AVIONICS_ARINC429TX_HIZ),
 };
-
 
 static int hi3593_create_netdevs(struct spi_device *spi)
 {

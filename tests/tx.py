@@ -54,7 +54,7 @@ with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
     sent = sock.send(bytes((
         0x01,0x02,0x03,0x04,
         0x01,0x02,0x03,0x04,
-        0x01,0x02,0x03,
+        0x01,0x02,0x03,0x04,
         )))
     if sent < 0:
         print(f"Send failed {error_code_to_str(-sent)}")
