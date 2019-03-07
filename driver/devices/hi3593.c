@@ -107,6 +107,8 @@ struct hi3593_priv {
 	struct workqueue_struct *wq;
 	struct work_struct worker;
 	int irq;
+	__u8 even_parity;
+	__u8 check_parity;
 };
 
 static ssize_t hi3593_get_cntrl(struct hi3593_priv *priv)
@@ -251,7 +253,7 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 	if (status < 0) {
 		pr_err("avionics-hi3593: Failed to get rx cntrl: %d\n", status);
 	} else {
-		config->flags = status;
+		config->flags = status | priv->even_parity;
 	}
 
 	if (priv->rx_index == 0) {
@@ -299,6 +301,18 @@ static int hi3593_set_arinc429rx(struct avionics_arinc429rx *config,
 		return err;
 	}
 
+	if(config->flags & AVIONICS_ARINC429RX_EVEN_PARITY) {
+		priv->even_parity = AVIONICS_ARINC429RX_EVEN_PARITY;
+	} else {
+		priv->even_parity = 0;
+	}
+
+	if(config->flags & AVIONICS_ARINC429RX_PARITY_CHECK) {
+		priv->check_parity = AVIONICS_ARINC429RX_PARITY_CHECK;
+	} else {
+		priv->check_parity = 0;
+	}
+
 	if (priv->rx_index == 0) {
 		wr_priority[0] = HI3593_OPCODE_WR_RX1_PRIORITY;
 		wr_filters[0] = HI3593_OPCODE_WR_RX1_FILTERS;
@@ -338,6 +352,7 @@ static void hi3593_get_arinc429tx(struct avionics_arinc429tx *config,
 		pr_err("avionics-hi3593: Failed to get private data\n");
 		return;
 	}
+
 
 	status = hi3593_get_cntrl(priv);
 	if (status < 0) {
@@ -458,7 +473,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 	const __u8 pl_bits[3] = {HI3593_PRIORITY_LABEL1,
 		HI3593_PRIORITY_LABEL2, HI3593_PRIORITY_LABEL3};
 	ssize_t status;
-	int err, i;
+	int err, i, cnt;
 
 	priv = container_of(work, struct hi3593_priv, worker);
 	dev = priv->dev;
@@ -499,8 +514,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 	}
 
 	if (status & HI3593_FIFO_FULL) {
-		pr_warn("avionics-hi3593: rx %d buffer over-run\n",
-			priv->rx_index);
+		stats->rx_errors++;
+		stats->rx_fifo_errors++;
 	}
 
 	if (status & (pl_bits[0] | pl_bits[1] | pl_bits[2])) {
@@ -527,33 +542,59 @@ static void hi3593_rx_worker(struct work_struct *work)
 				return;
 			}
 
-			skb = avionics_device_alloc_skb(dev, sizeof(__u32));
-			if (unlikely(!skb)) {
-				pr_err("avionics-lb: Failed to"
-				       " allocate RX buffer\n");
-				mutex_unlock(priv->lock);
-				return;
-			}
+			if(!priv->check_parity ||
+			   (priv->even_parity && (0x80&data[0])) ||
+			   ((0x80&data[0]) == 0x00)) {
+				if (priv->check_parity && priv->even_parity) {
+					data[0] &= 0x7f;
+				}
 
-			skb_copy_to_linear_data(skb, data, sizeof(__u32));
-			stats->rx_packets++;
-			stats->rx_bytes += skb->len;
-			netif_rx_ni(skb);
+				skb = avionics_device_alloc_skb(dev,
+								sizeof(__u32));
+				if (unlikely(!skb)) {
+					pr_err("avionics-lb: Failed to"
+					       " allocate RX buffer\n");
+					mutex_unlock(priv->lock);
+					return;
+				}
+
+				skb_copy_to_linear_data(skb, data,
+							sizeof(__u32));
+				stats->rx_packets++;
+				stats->rx_bytes += skb->len;
+				netif_rx_ni(skb);
+			} else {
+				stats->rx_errors++;
+				stats->rx_crc_errors++;
+			}
 		}
 	}
 
+	cnt = 0;
 	if (status & HI3593_FIFO_HALF) {
-		for (i = 0; i < HI3593_MTU; i = i+sizeof(__u32)) {
+		for (i = 0; i < HI3593_MTU; i += sizeof(__u32)) {
 
 			err = spi_write_then_read(priv->spi, &rd_cmd,
 						  sizeof(rd_cmd),
-						  &data[i],
+						  &data[cnt],
 						  sizeof(__u32));
 			if (unlikely(err)) {
 				pr_err("avionics-hi3593: Failed to"
 				       " read from fifo\n");
 				mutex_unlock(priv->lock);
 				return;
+			}
+
+			if(!priv->check_parity ||
+			   (priv->even_parity && (0x80&data[cnt])) ||
+			   ((0x80&data[cnt]) == 0x00)) {
+				cnt += sizeof(__u32);
+				if (priv->check_parity && priv->even_parity) {
+					data[cnt] &= 0x7f;
+				}
+			} else {
+				stats->rx_errors++;
+				stats->rx_crc_errors++;
 			}
 
 			status = spi_w8r8(priv->spi, status_cmd);
@@ -569,20 +610,22 @@ static void hi3593_rx_worker(struct work_struct *work)
 			}
 		}
 
-		skb = avionics_device_alloc_skb(dev, i);
-		if (unlikely(!skb)) {
-			pr_err("avionics-lb: Failed to"
-			       " allocate RX buffer\n");
-			mutex_unlock(priv->lock);
-			return;
+		if (cnt) {
+			skb = avionics_device_alloc_skb(dev, cnt);
+			if (unlikely(!skb)) {
+				pr_err("avionics-lb: Failed to"
+				       " allocate RX buffer\n");
+				mutex_unlock(priv->lock);
+				return;
+			}
+
+			skb_copy_to_linear_data(skb, data, cnt);
+
+			stats->rx_packets++;
+			stats->rx_bytes += skb->len;
+
+			netif_rx_ni(skb);
 		}
-
-		skb_copy_to_linear_data(skb, data, i);
-
-		stats->rx_packets++;
-		stats->rx_bytes += skb->len;
-
-		netif_rx_ni(skb);
 	}
 
 	mutex_unlock(priv->lock);

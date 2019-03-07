@@ -72,6 +72,7 @@ struct avionics_rate {
 #define AVIONICS_ARINC429RX_PARITY_CHECK		(1<<3)
 #define AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE		(1<<2)
 #define AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE	(1<<1)
+#define AVIONICS_ARINC429RX_EVEN_PARITY			(1<<0)
 
 struct avionics_arinc429rx {
 	__u8 flags;
