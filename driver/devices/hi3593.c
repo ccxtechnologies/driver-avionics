@@ -23,6 +23,7 @@
 #include <linux/init.h>
 #include <linux/spi/spi.h>
 #include <linux/of_gpio.h>
+#include <linux/of_irq.h>
 
 #include "avionics.h"
 #include "avionics-device.h"
@@ -91,6 +92,7 @@ struct hi3593_priv {
 	struct mutex *lock;
 	struct workqueue_struct *wq;
 	struct work_struct worker;
+	int irq;
 };
 
 static ssize_t hi3593_get_cntrl(struct hi3593_priv *priv)
@@ -431,6 +433,15 @@ static int hi3593_tx_stop(struct net_device *dev)
 	return 0;
 }
 
+static irqreturn_t hi3593_rx_irq(int irq, void *data)
+{
+	struct hi3593_priv *priv = data;
+
+	pr_info(" ==>    <==  \n");
+
+	return IRQ_HANDLED;
+}
+
 static void hi3593_tx_worker(struct work_struct *work)
 {
 	struct net_device *dev;
@@ -734,8 +745,8 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->tx_index = i;
 		priv->rx_index = -1;
 		skb_queue_head_init(&priv->skbq);
-		priv->wq = alloc_workqueue("hi3593-tx-%d",
-					   WQ_FREEZABLE | WQ_MEM_RECLAIM, 0, i);
+		priv->wq = alloc_workqueue("%s", WQ_FREEZABLE | WQ_MEM_RECLAIM,
+					   0, hi3593->tx[i]->name);
 		if (!priv->wq) {
 			pr_err("avionics-hi3593: Failed to allocate"
 			       " tx work-queue %d\n", i);
@@ -744,22 +755,21 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 
 		INIT_WORK(&priv->worker, hi3593_tx_worker);
 
-		err = avionics_device_register(hi3593->tx[i]);
-		if (err) {
-			pr_err("avionics-hi3593: Failed to register"
-			       " TX %d netdev\n", i);
-			avionics_device_free(hi3593->tx[i]);
-			return -EINVAL;
-		}
-
 		err = hi3593_set_arinc429tx(&avionics_arinc429tx_default,
 					    hi3593->tx[i]);
 		if (err) {
 			pr_err("avionics-hi3593: Failed to set TX %d"
 			       " default settings\n", i);
-			avionics_device_free(hi3593->tx[i]);
 			return -EINVAL;
 		}
+
+		err = avionics_device_register(hi3593->tx[i]);
+		if (err) {
+			pr_err("avionics-hi3593: Failed to register"
+			       " TX %d netdev\n", i);
+			return -EINVAL;
+		}
+
 	}
 
 	for (i = 0; i < HI3593_NUM_RX; i++) {
@@ -786,29 +796,39 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->tx_index = -1;
 		priv->rx_index = i;
 		skb_queue_head_init(&priv->skbq);
-		priv->wq = alloc_workqueue("hi3593-rx-%d",
-					   WQ_FREEZABLE | WQ_MEM_RECLAIM, 0, i);
+		priv->wq = alloc_workqueue("%s", WQ_FREEZABLE | WQ_MEM_RECLAIM,
+					   0, hi3593->rx[i]->name);
 		if (!priv->wq) {
 			pr_err("avionics-hi3593: Failed to allocate"
 			       " rx work-queue %d\n", i);
 			return -ENOMEM;
 		}
-		err = avionics_device_register(hi3593->rx[i]);
+
+		err = request_irq(hi3593->irq[i], hi3593_rx_irq,
+				  IRQF_TRIGGER_RISING | IRQF_ONESHOT,
+				  hi3593->rx[i]->name, priv);
 		if (err) {
 			pr_err("avionics-hi3593: Failed to register"
-			       " RX %d netdev\n", i);
-			avionics_device_free(hi3593->rx[i]);
+			       " RX %d irq %d\n", i, hi3593->irq[i]);
 			return -EINVAL;
 		}
+		priv->irq = hi3593->irq[i];
 
 		err = hi3593_set_arinc429rx(&avionics_arinc429rx_default,
 					    hi3593->rx[i]);
 		if (err) {
 			pr_err("avionics-hi3593: Failed to set RX %d"
 			       " default settings\n", i);
-			avionics_device_free(hi3593->rx[i]);
 			return -EINVAL;
 		}
+
+		err = avionics_device_register(hi3593->rx[i]);
+		if (err) {
+			pr_err("avionics-hi3593: Failed to register"
+			       " RX %d netdev\n", i);
+			return -EINVAL;
+		}
+
 	}
 
 	return 0;
@@ -824,31 +844,37 @@ static int hi3593_remove(struct spi_device *spi)
 
 	for (i = 0; i < HI3593_NUM_TX; i++) {
 		if (hi3593->tx[i]) {
-			avionics_device_unregister(hi3593->tx[i]);
-			avionics_device_free(hi3593->tx[i]);
 			priv = avionics_device_priv(hi3593->tx[i]);
 			if (priv) {
 				skb_queue_purge(&priv->skbq);
 				destroy_workqueue(priv->wq);
 			}
+			avionics_device_unregister(hi3593->tx[i]);
+			avionics_device_free(hi3593->tx[i]);
+			hi3593->tx[i] = NULL;
 		}
 	}
 
 	for (i = 0; i < HI3593_NUM_RX; i++) {
 		if (hi3593->rx[i]) {
-			avionics_device_unregister(hi3593->rx[i]);
-			avionics_device_free(hi3593->rx[i]);
 			priv = avionics_device_priv(hi3593->rx[i]);
 			if (priv) {
 				skb_queue_purge(&priv->skbq);
 				destroy_workqueue(priv->wq);
+				if (priv->irq) {
+					free_irq(priv->irq, priv);
+				}
 			}
+			avionics_device_unregister(hi3593->rx[i]);
+			avionics_device_free(hi3593->rx[i]);
+			hi3593->rx[i] = 0;
 		}
 	}
 
 	if (hi3593->reset_gpio > 0) {
 		gpio_set_value(hi3593->reset_gpio, 1);
 		gpio_free(hi3593->reset_gpio);
+		hi3593->reset_gpio = 0;
 	}
 
 	return 0;
@@ -901,8 +927,6 @@ static int hi3593_probe(struct spi_device *spi)
 		hi3593_remove(spi);
 		return err;
 	}
-
-	/* TODO: Setup IRQs */
 
 	return 0;
 }

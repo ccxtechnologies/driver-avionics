@@ -217,14 +217,25 @@ EXPORT_SYMBOL_GPL(avionics_device_priv);
 
 int avionics_device_register(struct net_device *dev)
 {
+	int err;
+	err = register_netdev(dev);
+	if (err) {
+		pr_err("avionics-device: Failed to register netdev\n");
+		return err;
+	}
+
 	dev->rtnl_link_ops = &device_link_ops;
-	return register_netdev(dev);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(avionics_device_register);
 
 void avionics_device_unregister(struct net_device *dev)
 {
-	unregister_netdev(dev);
+	if (dev->rtnl_link_ops == &device_link_ops) {
+		unregister_netdev(dev);
+	} else {
+		pr_warn("avionics-device: Device not registered\n");
+	}
 }
 EXPORT_SYMBOL_GPL(avionics_device_unregister);
 
