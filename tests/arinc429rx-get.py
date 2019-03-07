@@ -43,6 +43,7 @@ AVIONICS_ARINC429RX_SD_MASK_ENABLE = (1<<4)
 AVIONICS_ARINC429RX_PARITY_CHECK = (1<<3)
 AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE = (1<<2)
 AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE = (1<<1)
+AVIONICS_ARINC429RX_EVEN_PARITY = (1<<0)
 
 device = sys.argv[1]
 
@@ -145,5 +146,9 @@ if __name__ == "__main__":
     print(f"SD10 Mask = {bool(config.flags&AVIONICS_ARINC429RX_SD10_MASK)}")
     print(f"SD Mask Enable = {bool(config.flags&AVIONICS_ARINC429RX_SD_MASK_ENABLE)}")
     print(f"Parity Check Enabled = {bool(config.flags&AVIONICS_ARINC429RX_PARITY_CHECK)}")
+    print(f"Even Parity = {bool(config.flags&AVIONICS_ARINC429RX_EVEN_PARITY)}")
     print(f"Label Filter Enabled = {bool(config.flags&AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE)}")
     print(f"Priority Labels Enabled = {bool(config.flags&AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE)}")
+    print(f"Priority Labels = {config.priority_labels}")
+    print(f"Label Filters = {config.label_filters}")
+

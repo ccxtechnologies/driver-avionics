@@ -132,4 +132,7 @@ def set_arinc429tx(flags):
 
 if __name__ == "__main__":
 
-    set_arinc429tx(AVIONICS_ARINC429TX_SELF_TEST)
+    set_arinc429tx(
+            AVIONICS_ARINC429TX_FLIP_LABEL_BITS |
+            AVIONICS_ARINC429TX_EVEN_PARITY |
+            AVIONICS_ARINC429TX_PARITY_SET)

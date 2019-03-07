@@ -47,6 +47,7 @@ AVIONICS_ARINC429RX_SD_MASK_ENABLE = (1<<4)
 AVIONICS_ARINC429RX_PARITY_CHECK = (1<<3)
 AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE = (1<<2)
 AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE = (1<<1)
+AVIONICS_ARINC429RX_EVEN_PARITY = (1<<0)
 
 # from include/uapi/linux/if.h
 IFF_UP = 1
@@ -126,4 +127,12 @@ def set_arinc429rx(flags, priority_labels=bytes(3), label_filters=bytes(32)):
 
 if __name__ == "__main__":
 
-    set_arinc429rx(AVIONICS_ARINC429RX_PARITY_CHECK)
+    set_arinc429rx(AVIONICS_ARINC429RX_PARITY_CHECK |
+            AVIONICS_ARINC429RX_FLIP_LABEL_BITS |
+            AVIONICS_ARINC429RX_EVEN_PARITY,
+            priority_labels=bytes([0x01,0x80,0xff]),
+            label_filters=bytes([
+                0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+                0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+                0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+                0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff]))
