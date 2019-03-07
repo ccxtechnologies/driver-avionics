@@ -77,7 +77,7 @@ struct avionics_arinc429rx {
 	__u8 flags;
 	__u8 padding;
 	__u8 priority_labels[3];
-	__u8 label_filers[32]; /* one bit per label, starting at 0xFF */
+	__u8 label_filters[32]; /* one bit per label, starting at 0xFF */
 };
 
 #define AVIONICS_ARINC429TX_FLIP_LABEL_BITS	(1<<6)
