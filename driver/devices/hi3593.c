@@ -65,11 +65,25 @@ MODULE_VERSION("1.0.0");
 #define HI3593_OPCODE_WR_TX_FIFO	0x0c
 #define HI3593_OPCODE_WR_TX_SEND	0x40
 
+#define HI3593_OPCODE_RD_RX1_FIFO	0xa0
+#define HI3593_OPCODE_RD_RX2_FIFO	0xc0
+
+#define HI3593_OPCODE_RD_RX1_PL1	0xa4
+#define HI3593_OPCODE_RD_RX2_PL1	0xc4
+#define HI3593_OPCODE_RD_RX1_PL2	0xa8
+#define HI3593_OPCODE_RD_RX2_PL2	0xc8
+#define HI3593_OPCODE_RD_RX1_PL3	0xac
+#define HI3593_OPCODE_RD_RX2_PL3	0xcc
+
 #define AVIONICS_ARINC429TX_HIZ		(1<<7)
 
 #define HI3593_FIFO_FULL	0x04
 #define HI3593_FIFO_HALF	0x02
 #define HI3593_FIFO_EMPTY	0x01
+
+#define HI3593_PRIORITY_LABEL1	0x08
+#define HI3593_PRIORITY_LABEL2	0x10
+#define HI3593_PRIORITY_LABEL3	0x20
 
 #define HI3593_NUM_TX	1
 #define HI3593_NUM_RX	2
@@ -433,12 +447,109 @@ static int hi3593_tx_stop(struct net_device *dev)
 	return 0;
 }
 
+static void hi3593_rx_worker(struct work_struct *work)
+{
+	struct net_device *dev;
+	struct net_device_stats *stats;
+	struct hi3593_priv *priv;
+	struct sk_buff *skb;
+	__u8 status_cmd, rd_cmd, data[32*sizeof(__u32)];
+	__u8 pl1_cmd, pl2_cmd, pl3_cmd;
+	ssize_t status;
+	int err, i;
+
+	priv = container_of(work, struct hi3593_priv, worker);
+	dev = priv->dev;
+	stats = &dev->stats;
+
+	priv = avionics_device_priv(dev);
+	if (!priv) {
+		pr_err("avionics-hi3593: Failed to get private data\n");
+		return;
+	}
+
+	if (priv->rx_index == 0) {
+		rd_cmd = HI3593_OPCODE_RD_RX1_FIFO;
+		status_cmd = HI3593_OPCODE_RD_RX1_STATUS;
+		pl1_cmd = HI3593_OPCODE_RD_RX1_PL1;
+		pl2_cmd = HI3593_OPCODE_RD_RX1_PL2;
+		pl3_cmd = HI3593_OPCODE_RD_RX1_PL3;
+	} else if (priv->rx_index == 1) {
+		rd_cmd = HI3593_OPCODE_RD_RX2_FIFO;
+		status_cmd = HI3593_OPCODE_RD_RX2_STATUS;
+		pl1_cmd = HI3593_OPCODE_RD_RX2_PL1;
+		pl2_cmd = HI3593_OPCODE_RD_RX2_PL2;
+		pl3_cmd = HI3593_OPCODE_RD_RX2_PL3;
+	} else {
+		pr_err("avionics-hi3593: No valid port index\n");
+		return;
+	}
+
+	mutex_lock(priv->lock);
+
+	status = spi_w8r8(priv->spi, status_cmd);
+	if (status < 0) {
+		pr_err("avionics-hi3593: Failed to read status\n");
+		mutex_unlock(priv->lock);
+		return;
+	}
+
+	if (status & HI3593_FIFO_FULL) {
+		pr_warn("avionics-hi3593: rx %d buffer over-run\n",
+			priv->rx_index);
+	}
+
+	if (status & HI3593_FIFO_HALF) {
+		for (i = 0; i < HI3593_MTU; i = i+sizeof(__u32)) {
+
+			err = spi_write_then_read(priv->spi, &rd_cmd,
+						  sizeof(rd_cmd),
+						  &data[i],
+						  sizeof(__u32));
+			if (unlikely(err)) {
+				pr_err("avionics-hi3593: Failed to"
+				       " read from fifo\n");
+				mutex_unlock(priv->lock);
+				return;
+			}
+
+			status = spi_w8r8(priv->spi, status_cmd);
+			if (unlikely(status < 0)) {
+				pr_err("avionics-hi3593: Failed to"
+				       " read status\n");
+				mutex_unlock(priv->lock);
+				return;
+			}
+
+			if(status & HI3593_FIFO_EMPTY) {
+				break;
+			}
+		}
+
+		skb = avionics_device_alloc_skb(dev, i);
+		if (unlikely(!skb)) {
+			pr_err("avionics-lb: Failed ot allocate RX buffer\n");
+			mutex_unlock(priv->lock);
+			return;
+		}
+
+		skb_copy_to_linear_data(skb, data, i);
+
+		stats->rx_packets++;
+		stats->rx_bytes += skb->len;
+
+		netif_rx_ni(skb);
+	}
+
+	mutex_unlock(priv->lock);
+
+}
+
 static irqreturn_t hi3593_rx_irq(int irq, void *data)
 {
 	struct hi3593_priv *priv = data;
 
-	pr_info(" ==>    <==  \n");
-
+	queue_work(priv->wq, &priv->worker);
 	return IRQ_HANDLED;
 }
 
@@ -477,6 +588,12 @@ static void hi3593_tx_worker(struct work_struct *work)
 	mutex_lock(priv->lock);
 
 	status = spi_w8r8(priv->spi, rd_cmd);
+	if (status < 0) {
+		pr_err("avionics-hi3593: Failed to read status\n");
+		mutex_unlock(priv->lock);
+		return;
+	}
+
 	if ((status & HI3593_FIFO_FULL) ||
 	    ((skb->len > (1*sizeof(__u32))) &&
 	     (status & HI3593_FIFO_HALF)) ||
@@ -803,6 +920,8 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 			       " rx work-queue %d\n", i);
 			return -ENOMEM;
 		}
+
+		INIT_WORK(&priv->worker, hi3593_rx_worker);
 
 		err = request_irq(hi3593->irq[i], hi3593_rx_irq,
 				  IRQF_TRIGGER_RISING | IRQF_ONESHOT,

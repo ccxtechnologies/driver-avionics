@@ -37,7 +37,7 @@ static void lb_rx(struct sk_buff *skb_xmit, struct net_device *dev)
 
 	pr_debug("avionics-lb: RX Packet\n");
 
-	skb = avionics_device_alloc_skb(dev, skb_xmit->len) ;
+	skb = avionics_device_alloc_skb(dev, skb_xmit->len);
 	if (!skb) {
 		pr_err("avionics-lb: Failed ot allocate RX buffer\n");
 		return;
