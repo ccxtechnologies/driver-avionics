@@ -253,7 +253,7 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 	if (status < 0) {
 		pr_err("avionics-hi3593: Failed to get rx cntrl: %d\n", status);
 	} else {
-		config->flags = status | priv->even_parity;
+		config->flags = (status&0xfe) | priv->even_parity;
 	}
 
 	if (priv->rx_index == 0) {

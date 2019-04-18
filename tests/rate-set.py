@@ -43,12 +43,14 @@ IFF_UP = 1
 
 device = sys.argv[1]
 
+
 def get_index(device):
     with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
         data = struct.pack("16si", device.encode(), 0)
         res = fcntl.ioctl(sock, SIOCGIFINDEX, data)
         index, = struct.unpack("16xi", res)
         return index
+
 
 class CStruct:
     def __init__(self, name, pack, fields):
@@ -68,30 +70,50 @@ class CStruct:
     def consume(self, data):
         return data[len(self):], self.unpack(data[:len(self)])
 
-nlmsghdr = CStruct("nlmsghdr", "=LHHLL", ("nlmsg_len", "nlmsg_type", "nlmsg_flags", "nlmsg_seq", "nlmsg_pid"))
+
+nlmsghdr = CStruct(
+        "nlmsghdr", "=LHHLL",
+        ("nlmsg_len", "nlmsg_type", "nlmsg_flags", "nlmsg_seq", "nlmsg_pid")
+)
 nlmsgerr = CStruct("nlmsgerr", "=i", ("error"))
-ifinfomsg = CStruct("ifinfomsg", "=BxHiII", ("ifi_family", "ifi_type","ifi_index", "ifi_flags", "ifi_change"))
+ifinfomsg = CStruct(
+        "ifinfomsg", "=BxHiII",
+        ("ifi_family", "ifi_type", "ifi_index", "ifi_flags", "ifi_change")
+)
 rattr = CStruct("rattr", "=HH", ("rta_len", "rta_type"))
 
 avionics_rate = CStruct("avionics_rate", "=L", ("rate_hz"))
 
+
 def set_rate(rate):
-    with socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE) as sock:
+    with socket.socket(
+            socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE
+    ) as sock:
         sock.bind((os.getpid(), 0))
 
         index = get_index(device)
 
         kind = b"avionics\x00\x00\x00\x00"
 
-        set_rate = rattr.pack(len(rattr) + len(avionics_rate), IFLA_AVIONICS_RATE) + avionics_rate.pack(rate)
-        info_data = rattr.pack(len(rattr) + len(set_rate), IFLA_INFO_DATA) + set_rate
+        set_rate = rattr.pack(
+                len(rattr) + len(avionics_rate), IFLA_AVIONICS_RATE
+        ) + avionics_rate.pack(rate)
+        info_data = rattr.pack(
+                len(rattr) + len(set_rate), IFLA_INFO_DATA
+        ) + set_rate
 
         info_kind = rattr.pack(len(rattr) + len(kind), IFLA_INFO_KIND) + kind
 
-        command = rattr.pack(len(rattr) + len(info_kind) + len(info_data), IFLA_LINKINFO) + info_kind + info_data
+        command = rattr.pack(
+                len(rattr) + len(info_kind) + len(info_data), IFLA_LINKINFO
+        ) + info_kind + info_data
 
-        msg = (nlmsghdr.pack(len(nlmsghdr) + len(ifinfomsg) + len(command), RTM_NEWLINK, NLM_F_REQUEST | NLM_F_ACK, 0, 0) +
-                ifinfomsg.pack(0, 0, index, IFF_UP, IFF_UP) + command)
+        msg = (
+                nlmsghdr.pack(
+                        len(nlmsghdr) + len(ifinfomsg) + len(command),
+                        RTM_NEWLINK, NLM_F_REQUEST | NLM_F_ACK, 0, 0
+                ) + ifinfomsg.pack(0, 0, index, IFF_UP, IFF_UP) + command
+        )
 
         sock.send(msg)
 
@@ -111,6 +133,7 @@ def set_rate(rate):
                 if msgerr.error:
                     print(f"Error: {msgerr} from {msgerrhdr}")
                 return
+
 
 if __name__ == "__main__":
 
