@@ -358,7 +358,7 @@ static void hi3593_get_arinc429tx(struct avionics_arinc429tx *config,
 	if (status < 0) {
 		pr_err("avionics-hi3593: Failed to get tx cntrl: %d\n", status);
 	} else {
-		config->flags = status;
+		config->flags = status&0xfe;
 	}
 
 }
