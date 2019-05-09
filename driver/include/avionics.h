@@ -91,11 +91,30 @@ struct avionics_arinc429tx {
 	__u8 padding[3];
 };
 
+#define AVIONICS_ARINC717RX_BPRZ		(1<<0)
+#define AVIONICS_ARINC717RX_NOSYNC		(1<<1)
+#define AVIONICS_ARINC717RX_SFTSYNC		(1<<2)
+
+struct avionics_arinc717rx {
+	__u8 flags;
+	__u8 padding[3];
+};
+
+#define AVIONICS_ARINC717TX_SLEW		(3<<1)
+#define AVIONICS_ARINC717TX_SELF_TEST		(1<<0)
+
+struct avionics_arinc717tx {
+	__u8 flags;
+	__u8 padding[3];
+};
+
 enum {
 	IFLA_AVIONICS_UNSPEC,
 	IFLA_AVIONICS_RATE,
 	IFLA_AVIONICS_ARINC429RX,
 	IFLA_AVIONICS_ARINC429TX,
+	IFLA_AVIONICS_ARINC717RX,
+	IFLA_AVIONICS_ARINC717TX,
 	__IFLA_AVIONICS_MAX
 };
 
