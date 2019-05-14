@@ -14,4 +14,4 @@ obj-m		+= avionics-hi3593.o
 avionics-hi3593-y	:= devices/hi3593.o
 
 obj-m		+= avionics-hi3717a.o
-avionics-hi3593-y	:= devices/hi3717a.o
+avionics-hi3717a-y	:= devices/hi3717a.o
