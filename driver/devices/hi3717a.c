@@ -54,9 +54,10 @@ MODULE_VERSION("1.0.0");
 #define HI3717A_OPCODE_RD_RXFIFO	0xfe
 
 
-#define HI3717A_FIFO_FULL	0x04
-#define HI3717A_FIFO_HALF	0x02
-#define HI3717A_FIFO_EMPTY	0x01
+#define HI3717A_FIFO_FULL	0x10
+#define HI3717A_FIFO_HALF	0x08
+#define HI3717A_FIFO_EMPTY	0x04
+#define HI3717A_FIFO_OVF	0x02
 
 #define HI3717A_NUM_TX	1
 #define HI3717A_NUM_RX	1
@@ -176,6 +177,10 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 	}
 
 	ctrl0 = hi3717a_get_ctrl(priv, HI3717A_OPCODE_RD_CTRL0);
+	if (ctrl0 < 0) {
+		pr_err("avionics-hi3717a: Failed to read CTRL0\n");
+		return ctrl0;
+	}
 
 	if ((ctrl0&0x78) == value) {
 		return 0;
@@ -184,8 +189,22 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 	pr_warn("avionics-hi3717a: resetting device to change speed\n");
 
 	ctrl1 = hi3717a_get_ctrl(priv, HI3717A_OPCODE_RD_CTRL1);
+	if (ctrl1 < 0) {
+		pr_err("avionics-hi3717a: Failed to read CTRL1\n");
+		return ctrl1;
+	}
+
 	fspin = hi3717a_get_ctrl(priv, HI3717A_OPCODE_RD_FSPIN);
+	if (fspin < 0) {
+		pr_err("avionics-hi3717a: Failed to read FSPIN\n");
+		return fspin;
+	}
+
 	wrdcnt = hi3717a_get_ctrl(priv, HI3717A_OPCODE_RD_WRDCNT);
+	if (wrdcnt < 0) {
+		pr_err("avionics-hi3717a: Failed to read WRDCNT\n");
+		return wrdcnt;
+	}
 
 	gpio_set_value(hi3717a->reset_gpio, 0);
 	usleep_range(10, 100);
@@ -258,60 +277,37 @@ static void hi3717a_get_rate(struct avionics_rate *rate,
 	}
 }
 
-/* === TODO: Continue updating 429 to 717 from here === */
-
-static void hi3717a_get_arinc429rx(struct avionics_arinc429rx *config,
+static void hi3717a_get_arinc717rx(struct avionics_arinc717rx *config,
 				  const struct net_device *dev)
 {
 	struct hi3717a_priv *priv;
 	__u8 rd_priority, rd_filters;
-	ssize_t status;
+	ssize_t cntrl0, cntrl1;
 	int err;
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
 		pr_err("avionics-hi3717a: Failed to get private data\n");
-		return;
 	}
 
-	status = hi3717a_get_cntrl(priv);
-	if (status < 0) {
-		pr_err("avionics-hi3717a: Failed to get rx cntrl: %d\n", status);
-	} else {
-		config->flags = (status&0xfe) | priv->even_parity;
+	ctrl0 = hi3717a_get_ctrl(priv, HI3717A_OPCODE_RD_CTRL0);
+	if (ctrl0 < 0) {
+		pr_err("avionics-hi3717a: Failed to read CTRL0\n");
 	}
 
-	if (priv->rx_index == 0) {
-		rd_priority = HI3717A_OPCODE_RD_RX1_PRIORITY;
-		rd_filters = HI3717A_OPCODE_RD_RX1_FILTERS;
-	} else if (priv->rx_index == 1) {
-		rd_priority = HI3717A_OPCODE_RD_RX2_PRIORITY;
-		rd_filters = HI3717A_OPCODE_RD_RX2_FILTERS;
-	} else {
-		pr_err("avionics-hi3717a: No valid rx port index\n");
-		return;
+	ctrl1 = hi3717a_get_ctrl(priv, HI3717A_OPCODE_RD_CTRL1);
+	if (ctrl1 < 0) {
+		pr_err("avionics-hi3717a: Failed to read CTRL1\n");
 	}
 
-	err = spi_write_then_read(priv->spi, &rd_priority, sizeof(rd_priority),
-				  config->priority_labels, 3);
-	if (err) {
-		pr_err("avionics-hi3717a: Failed to get rx priorty labels: %d\n",
-		       err);
-	}
+	config->flags = (ctrl0&0x01)|(cntrl1&0x06);
 
-	err = spi_write_then_read(priv->spi, &rd_filters, sizeof(rd_filters),
-				  config->label_filters, 32);
-	if (err) {
-		pr_err("avionics-hi3717a: Failed to get rx label filters: %d\n",
-		       err);
-	}
 }
 
-static int hi3717a_set_arinc429rx(struct avionics_arinc429rx *config,
+static int hi3717a_set_arinc717rx(struct avionics_arinc717rx *config,
 				 const struct net_device *dev)
 {
 	struct hi3717a_priv *priv;
-	__u8 wr_priority[4], wr_filters[33];
 	int err;
 
 	priv = avionics_device_priv(dev);
@@ -320,53 +316,24 @@ static int hi3717a_set_arinc429rx(struct avionics_arinc429rx *config,
 		return -ENODEV;
 	}
 
-	err = hi3717a_set_cntrl(priv, config->flags, 0xfe);
+	err = hi3717a_set_cntrl(priv, config->flags, 0x01,
+			      HI3717A_OPCODE_WR_CTRL0, HI3717A_OPCODE_RD_CTRL0);
 	if (err < 0) {
-		pr_err("avionics-hi3717a: Failed to set rx control.\n");
+		pr_err("avionics-hi3717a: Failed to set CTRL0\n");
 		return err;
 	}
 
-	if(config->flags & AVIONICS_ARINC429RX_EVEN_PARITY) {
-		priv->even_parity = AVIONICS_ARINC429RX_EVEN_PARITY;
-	} else {
-		priv->even_parity = 0;
-	}
-
-	if(config->flags & AVIONICS_ARINC429RX_PARITY_CHECK) {
-		priv->check_parity = AVIONICS_ARINC429RX_PARITY_CHECK;
-	} else {
-		priv->check_parity = 0;
-	}
-
-	if (priv->rx_index == 0) {
-		wr_priority[0] = HI3717A_OPCODE_WR_RX1_PRIORITY;
-		wr_filters[0] = HI3717A_OPCODE_WR_RX1_FILTERS;
-	} else if (priv->rx_index == 1) {
-		wr_priority[0] = HI3717A_OPCODE_WR_RX2_PRIORITY;
-		wr_filters[0] = HI3717A_OPCODE_WR_RX2_FILTERS;
-	} else {
-		pr_err("avionics-hi3717a: No valid rx port index\n");
-		return -EINVAL;
-	}
-
-	memcpy(&wr_priority[1], config->priority_labels, 3);
-	err = spi_write(priv->spi, wr_priority, sizeof(wr_priority));
+	err = hi3717a_set_cntrl(priv, config->flags, 0x06,
+			      HI3717A_OPCODE_WR_CTRL1, HI3717A_OPCODE_RD_CTRL1);
 	if (err < 0) {
-		pr_err("avionics-hi3717a: Failed to set priority.\n");
-		return err;
-	}
-
-	memcpy(&wr_filters[1], config->label_filters, 32);
-	err = spi_write(priv->spi, wr_filters, sizeof(wr_filters));
-	if (err < 0) {
-		pr_err("avionics-hi3717a: Failed to set priority.\n");
+		pr_err("avionics-hi3717a: Failed to set CTRL1\n");
 		return err;
 	}
 
 	return 0;
 }
 
-static void hi3717a_get_arinc429tx(struct avionics_arinc429tx *config,
+static void hi3717a_get_arinc717tx(struct avionics_arinc717tx *config,
 				  const struct net_device *dev)
 {
 	struct hi3717a_priv *priv;
@@ -375,20 +342,23 @@ static void hi3717a_get_arinc429tx(struct avionics_arinc429tx *config,
 	priv = avionics_device_priv(dev);
 	if (!priv) {
 		pr_err("avionics-hi3717a: Failed to get private data\n");
-		return;
 	}
 
-
-	status = hi3717a_get_cntrl(priv);
-	if (status < 0) {
-		pr_err("avionics-hi3717a: Failed to get tx cntrl: %d\n", status);
-	} else {
-		config->flags = status&0xfe;
+	ctrl0 = hi3717a_get_ctrl(priv, HI3717A_OPCODE_RD_CTRL0);
+	if (ctrl0 < 0) {
+		pr_err("avionics-hi3717a: Failed to read CTRL0\n");
 	}
+
+	ctrl1 = hi3717a_get_ctrl(priv, HI3717A_OPCODE_RD_CTRL1);
+	if (ctrl1 < 0) {
+		pr_err("avionics-hi3717a: Failed to read CTRL1\n");
+	}
+
+	config->flags = (ctrl0&0x06)|(cntrl1&0x01);
 
 }
 
-static int hi3717a_set_arinc429tx(struct avionics_arinc429tx *config,
+static int hi3717a_set_arinc717tx(struct avionics_arinc717tx *config,
 				 const struct net_device *dev)
 {
 	struct hi3717a_priv *priv;
@@ -400,29 +370,38 @@ static int hi3717a_set_arinc429tx(struct avionics_arinc429tx *config,
 		return -ENODEV;
 	}
 
-	err = hi3717a_set_cntrl(priv, config->flags, 0x5c);
+
+	err = hi3717a_set_cntrl(priv, config->flags, 0x06,
+			      HI3717A_OPCODE_WR_CTRL0, HI3717A_OPCODE_RD_CTRL0);
 	if (err < 0) {
-		pr_err("avionics-hi3717a: Failed to set tx cntrl.\n");
+		pr_err("avionics-hi3717a: Failed to set CTRL0\n");
+		return err;
+	}
+
+	err = hi3717a_set_cntrl(priv, config->flags, 0x01,
+			      HI3717A_OPCODE_WR_CTRL1, HI3717A_OPCODE_RD_CTRL1);
+	if (err < 0) {
+		pr_err("avionics-hi3717a: Failed to set CTRL1\n");
 		return err;
 	}
 
 	return 0;
 }
 
-static struct avionics_ops hi3717a_arinc429rx_ops = {
-	.name = "arinc429rx%d",
+static struct avionics_ops hi3717a_arinc717rx_ops = {
+	.name = "arinc717rx%d",
 	.set_rate = hi3717a_set_rate,
 	.get_rate = hi3717a_get_rate,
-	.get_arinc429rx = hi3717a_get_arinc429rx,
-	.set_arinc429rx = hi3717a_set_arinc429rx,
+	.get_arinc717rx = hi3717a_get_arinc717rx,
+	.set_arinc717rx = hi3717a_set_arinc717rx,
 };
 
-static struct avionics_ops hi3717a_arinc429tx_ops = {
-	.name = "arinc429tx%d",
+static struct avionics_ops hi3717a_arinc717tx_ops = {
+	.name = "arinc717tx%d",
 	.set_rate = hi3717a_set_rate,
 	.get_rate = hi3717a_get_rate,
-	.get_arinc429tx = hi3717a_get_arinc429tx,
-	.set_arinc429tx = hi3717a_set_arinc429tx,
+	.get_arinc717tx = hi3717a_get_arinc717tx,
+	.set_arinc717tx = hi3717a_set_arinc717tx,
 };
 
 static int hi3717a_change_mtu(struct net_device *dev, int mtu)
@@ -437,23 +416,7 @@ static int hi3717a_change_mtu(struct net_device *dev, int mtu)
 
 static int hi3717a_tx_open(struct net_device *dev)
 {
-	struct hi3717a_priv *priv;
-	int err;
-
 	pr_warn("avionics-hi3717a: Enabling Driver\n");
-
-	priv = avionics_device_priv(dev);
-	if (!priv) {
-		pr_err("avionics-hi3717a: Failed to get private data\n");
-		return -EINVAL;
-	}
-
-	err = hi3717a_set_cntrl(priv, 0, AVIONICS_ARINC429TX_HIZ);
-	if (err < 0) {
-		pr_err("avionics-hi3717a: Failed to disable driver\n");
-		return err;
-	}
-
 	netif_wake_queue(dev);
 
 	return 0;
@@ -477,13 +440,6 @@ static int hi3717a_tx_stop(struct net_device *dev)
 	skb_queue_purge(&priv->skbq);
 	flush_workqueue(priv->wq);
 
-	err = hi3717a_set_cntrl(priv, AVIONICS_ARINC429TX_HIZ,
-			       AVIONICS_ARINC429TX_HIZ);
-	if (err < 0) {
-		pr_err("avionics-hi3717a: Failed to disable driver\n");
-		return err;
-	}
-
 	return 0;
 }
 
@@ -493,10 +449,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	struct net_device_stats *stats;
 	struct hi3717a_priv *priv;
 	struct sk_buff *skb;
-	__u8 status_cmd, rd_cmd, data[32*sizeof(__u32)];
-	__u8 pl_cmd[3], pl_rd, pl[3];
-	const __u8 pl_bits[3] = {HI3717A_PRIORITY_LABEL1,
-		HI3717A_PRIORITY_LABEL2, HI3717A_PRIORITY_LABEL3};
+	__u8 rd_cmd, data[HI3717A_MTU];
 	ssize_t status;
 	int err, i, cnt;
 
@@ -510,95 +463,24 @@ static void hi3717a_rx_worker(struct work_struct *work)
 		return;
 	}
 
-	if (priv->rx_index == 0) {
-		rd_cmd = HI3717A_OPCODE_RD_RX1_FIFO;
-		status_cmd = HI3717A_OPCODE_RD_RX1_STATUS;
-		pl_cmd[0] = HI3717A_OPCODE_RD_RX1_PL1;
-		pl_cmd[1] = HI3717A_OPCODE_RD_RX1_PL2;
-		pl_cmd[2] = HI3717A_OPCODE_RD_RX1_PL3;
-		pl_rd = HI3717A_OPCODE_RD_RX1_PRIORITY;
-	} else if (priv->rx_index == 1) {
-		rd_cmd = HI3717A_OPCODE_RD_RX2_FIFO;
-		status_cmd = HI3717A_OPCODE_RD_RX2_STATUS;
-		pl_cmd[0] = HI3717A_OPCODE_RD_RX2_PL1;
-		pl_cmd[1] = HI3717A_OPCODE_RD_RX2_PL2;
-		pl_cmd[2] = HI3717A_OPCODE_RD_RX2_PL3;
-		pl_rd = HI3717A_OPCODE_RD_RX2_PRIORITY;
-	} else {
-		pr_err("avionics-hi3717a: No valid port index\n");
-		return;
-	}
-
 	mutex_lock(priv->lock);
 
-	status = spi_w8r8(priv->spi, status_cmd);
+	status = hi3717a_get_ctrl(priv, HI3717A_OPCODE_RD_RXFSTAT);
 	if (status < 0) {
 		pr_err("avionics-hi3717a: Failed to read status\n");
 		mutex_unlock(priv->lock);
 		return;
 	}
 
-	if (status & HI3717A_FIFO_FULL) {
+	if (status & HI3717A_FIFO_OVF) {
 		stats->rx_errors++;
 		stats->rx_fifo_errors++;
 	}
 
-	if (status & (pl_bits[0] | pl_bits[1] | pl_bits[2])) {
-		err = spi_write_then_read(priv->spi, &pl_rd, sizeof(pl_rd),
-					  pl, sizeof(pl));
-		if (unlikely(err)) {
-			pr_err("avionics-hi3717a: Failed to"
-			       " read priority labels\n");
-			mutex_unlock(priv->lock);
-			return;
-		}
-	}
-
-	for (i = 0; i < 3; i++) {
-		if (status & pl_bits[i]) {
-			data[3] = pl[2-i];
-			err = spi_write_then_read(priv->spi, &pl_cmd[i],
-						  sizeof(pl_cmd[0]), data,
-						  sizeof(__u32)-1);
-			if (unlikely(err)) {
-				pr_err("avionics-hi3717a: Failed to"
-				       " read priority label\n");
-				mutex_unlock(priv->lock);
-				return;
-			}
-
-			if(!priv->check_parity ||
-			   (priv->even_parity && (0x80&data[0])) ||
-			   ((0x80&data[0]) == 0x00)) {
-				if (priv->check_parity && priv->even_parity) {
-					data[0] &= 0x7f;
-				}
-
-				skb = avionics_device_alloc_skb(dev,
-								sizeof(__u32));
-				if (unlikely(!skb)) {
-					pr_err("avionics-lb: Failed to"
-					       " allocate RX buffer\n");
-					mutex_unlock(priv->lock);
-					return;
-				}
-
-				skb_copy_to_linear_data(skb, data,
-							sizeof(__u32));
-				stats->rx_packets++;
-				stats->rx_bytes += skb->len;
-				netif_rx_ni(skb);
-			} else {
-				stats->rx_errors++;
-				stats->rx_crc_errors++;
-			}
-		}
-	}
-
 	cnt = 0;
-	if (status & HI3717A_FIFO_HALF) {
+	rd_cmd = HI3717A_OPCODE_RD_RXFIFO;
+	if (!(status & HI3717A_FIFO_EMPTY)) {
 		for (i = 0; i < HI3717A_MTU; i += sizeof(__u32)) {
-
 			err = spi_write_then_read(priv->spi, &rd_cmd,
 						  sizeof(rd_cmd),
 						  &data[cnt],
@@ -610,19 +492,11 @@ static void hi3717a_rx_worker(struct work_struct *work)
 				return;
 			}
 
-			if(!priv->check_parity ||
-			   (priv->even_parity && (0x80&data[cnt])) ||
-			   ((0x80&data[cnt]) == 0x00)) {
-				cnt += sizeof(__u32);
-				if (priv->check_parity && priv->even_parity) {
-					data[cnt] &= 0x7f;
-				}
-			} else {
-				stats->rx_errors++;
-				stats->rx_crc_errors++;
-			}
+			cnt += sizeof(__u32);
 
 			status = spi_w8r8(priv->spi, status_cmd);
+			status = hi3717a_get_ctrl(priv,
+						  HI3717A_OPCODE_RD_RXFSTAT);
 			if (unlikely(status < 0)) {
 				pr_err("avionics-hi3717a: Failed to"
 				       " read status\n");
@@ -671,7 +545,7 @@ static void hi3717a_tx_worker(struct work_struct *work)
 	struct net_device_stats *stats;
 	struct hi3717a_priv *priv;
 	struct sk_buff *skb;
-	__u8 rd_cmd, wr_cmd[5], send_cmd;
+	__u8 rd_cmd, wr_cmd[3], send_cmd;
 	ssize_t status;
 	int err, i;
 
@@ -685,13 +559,6 @@ static void hi3717a_tx_worker(struct work_struct *work)
 		return;
 	}
 
-	if (priv->tx_index == 0) {
-		rd_cmd = HI3717A_OPCODE_RD_TX_STATUS;
-	} else {
-		pr_err("avionics-hi3717a: No valid port index\n");
-		return;
-	}
-
 	skb = skb_dequeue(&priv->skbq);
 	if (!skb) {
 		return;
@@ -699,18 +566,14 @@ static void hi3717a_tx_worker(struct work_struct *work)
 
 	mutex_lock(priv->lock);
 
-	status = spi_w8r8(priv->spi, rd_cmd);
+	status = hi3717a_get_ctrl(priv, HI3717A_OPCODE_RD_TXFSTAT);
 	if (status < 0) {
 		pr_err("avionics-hi3717a: Failed to read status\n");
 		mutex_unlock(priv->lock);
 		return;
 	}
 
-	if ((status & HI3717A_FIFO_FULL) ||
-	    ((skb->len > (1*sizeof(__u32))) &&
-	     (status & HI3717A_FIFO_HALF)) ||
-	    ((skb->len > (16*sizeof(__u32))) &&
-	     !(status & HI3717A_FIFO_EMPTY))) {
+	if (status & 0x80) {
 		/* TODO: Come up with a better dropping algo. */
 		kfree_skb(skb);
 		stats->tx_dropped++;
@@ -718,23 +581,15 @@ static void hi3717a_tx_worker(struct work_struct *work)
 		return;
 	}
 
-	wr_cmd[0] = HI3717A_OPCODE_WR_TX_FIFO;
-	for (i = 0; i < skb->len; i = i + sizeof(__u32)) {
-		memcpy(&wr_cmd[1], &skb->data[i], sizeof(__u32));
+	wr_cmd[0] = HI3717A_OPCODE_WR_TXFIFO;
+	for (i = 0; i < skb->len; i = i + sizeof(__u16)) {
+		memcpy(&wr_cmd[1], &skb->data[i], sizeof(__u16));
 		err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
 		if (err < 0) {
 			pr_err("avionics-hi3717a: Failed to load fifo\n");
 			mutex_unlock(priv->lock);
 			return;
 		}
-	}
-
-	send_cmd = HI3717A_OPCODE_WR_TX_SEND;
-	err = spi_write(priv->spi, &send_cmd, sizeof(send_cmd));
-	if (err < 0) {
-		pr_err("avionics-hi3717a: Failed to send transmit command\n");
-		mutex_unlock(priv->lock);
-		return;
 	}
 
 	mutex_unlock(priv->lock);
@@ -831,20 +686,11 @@ static int hi3717a_get_config(struct spi_device *spi)
 		}
 	}
 
-	err = of_property_read_u32(dev->of_node, "aclk", &hi3717a->aclk);
-	if (err) {
-		pr_err("avionics-hi3717a: Failed to get aclk"
-		       " frequency from dts: %d\n",err);
-		return err;
-	}
-
-	for (i = 0; i < HI3717A_NUM_RX; i++) {
-		hi3717a->irq[i] = irq_of_parse_and_map(dev->of_node, i);
-		if (hi3717a->irq[i] < 0) {
-			pr_err("avionics-hi3717a: Failed to"
-			       " get irq %d: %d\n", i, hi3717a->irq[i]);
-			return hi3717a->irq[i];
-		}
+	hi3717a->irq = irq_of_parse_and_map(dev->of_node, 0);
+	if (hi3717a->irq < 0) {
+		pr_err("avionics-hi3717a: Failed to"
+		       " get irq: %d\n", hi3717a->irq);
+		return hi3717a->irq;
 	}
 
 	return 0;
@@ -857,26 +703,14 @@ static int hi3717a_reset(struct spi_device *spi)
 	ssize_t status;
 	int err;
 
-	if (hi3717a->reset_gpio <= 0 ) {
-		pr_err("avionics-hi3717a: Reset GPIO Reset missing/malformed,"
-		       " will use reset command.\n");
-		hi3717a->reset_gpio = 0;
-		opcode = HI3717A_OPCODE_RESET;
-		err = spi_write(spi, &opcode, sizeof(opcode));
-		if (err < 0) {
-			pr_err("avionics-hi3717a: Failed to"
-			       " send reset command\n");
-			return err;
-		}
+	gpio_set_value(hi3717a->reset_gpio, 0);
+	usleep_range(10, 100);
+	gpio_set_value(hi3717a->reset_gpio, 1);
 
-	} else {
-		usleep_range(100, 150);
-		gpio_set_value(hi3717a->reset_gpio, 0);
-	}
-
-	status = spi_w8r8(spi, HI3717A_OPCODE_RD_TX_STATUS);
+	status = hi3717a_get_ctrl(priv, HI3717A_OPCODE_RD_TXFSTAT);
 	if (status != 0x01) {
-		pr_err("avionics-hi3717a: TX FIFO is not cleared: %x\n", status);
+		pr_err("avionics-hi3717a: TX FIFO is not cleared: %x\n",
+		       status);
 		return -ENODEV;
 	}
 
@@ -884,64 +718,12 @@ static int hi3717a_reset(struct spi_device *spi)
 	return 0;
 }
 
-static int hi3717a_set_aclk(struct spi_device *spi)
-{
-	struct hi3717a *hi3717a = spi_get_drvdata(spi);
-	int err;
-	__u8 cmd[2];
-	ssize_t status;
-
-	if ((hi3717a->aclk < 1000000) || (hi3717a->aclk > 30000000)) {
-		pr_err("avionics-hi3717a: aclk must be between"
-		       " 1000000 and 30000000 (1MHz - 30MHz)\n");
-		return -EINVAL;
-	}
-
-	if ((hi3717a->aclk != 1000000) && (hi3717a->aclk % 2000000)) {
-		pr_err("avionics-hi3717a: aclk must be either 1000000"
-		       " or a multiple of 2000000\n");
-		return -EINVAL;
-	}
-
-	cmd[0] = HI3717A_OPCODE_WR_ALCK;
-	if (hi3717a->aclk == 1000000) {
-		cmd[1] = 0x00;
-	} else {
-		cmd[1] = hi3717a->aclk/2000000;
-	}
-
-	err = spi_write(spi, &cmd, sizeof(cmd));
-	if (err < 0) {
-		pr_err("avionics-hi3717a: Failed to send aclk set command\n");
-		return err;
-	}
-
-	status = spi_w8r8(spi, HI3717A_OPCODE_RD_ALCK);
-	if (status != cmd[1]) {
-		pr_err("avionics-hi3717a: ALCK not set to 0x%x: 0x%x\n",
-		       cmd[1], status);
-		return -ENODEV;
-	}
-
-	pr_info("avionics-hi3717a: ALCK set to 0x%x\n", status);
-
-	return 0;
-}
-
-static struct avionics_arinc429rx avionics_arinc429rx_default = {
-	.flags = (AVIONICS_ARINC429RX_FLIP_LABEL_BITS |
-		  AVIONICS_ARINC429RX_PARITY_CHECK),
-	.priority_labels = {0,0,0},
-	.label_filters = {0,0,0,0,0,0,0,0,
-		0,0,0,0,0,0,0,0,
-		0,0,0,0,0,0,0,0,
-		0,0,0,0,0,0,0,0},
+static struct avionics_arinc717rx avionics_arinc717rx_default = {
+	.flags = 0,
 };
 
-static struct avionics_arinc429tx avionics_arinc429tx_default = {
-	.flags = (AVIONICS_ARINC429TX_FLIP_LABEL_BITS |
-		  AVIONICS_ARINC429TX_PARITY_SET |
-		  AVIONICS_ARINC429TX_HIZ),
+static struct avionics_arinc717tx avionics_arinc717tx_default = {
+	.flags = 0,
 };
 
 static int hi3717a_create_netdevs(struct spi_device *spi)
@@ -952,7 +734,7 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 
 	for (i = 0; i < HI3717A_NUM_TX; i++) {
 		hi3717a->tx[i] = avionics_device_alloc(sizeof(*priv),
-						      &hi3717a_arinc429tx_ops);
+						      &hi3717a_arinc717tx_ops);
 		if (!hi3717a->tx[i] ) {
 			pr_err("avionics-hi3717a: Failed to allocate"
 			       " TX %d netdev\n", i);
@@ -984,7 +766,7 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 
 		INIT_WORK(&priv->worker, hi3717a_tx_worker);
 
-		err = hi3717a_set_arinc429tx(&avionics_arinc429tx_default,
+		err = hi3717a_set_arinc717tx(&avionics_arinc717tx_default,
 					    hi3717a->tx[i]);
 		if (err) {
 			pr_err("avionics-hi3717a: Failed to set TX %d"
@@ -1003,7 +785,7 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 
 	for (i = 0; i < HI3717A_NUM_RX; i++) {
 		hi3717a->rx[i] = avionics_device_alloc(sizeof(*priv),
-						      &hi3717a_arinc429rx_ops);
+						      &hi3717a_arinc717rx_ops);
 		if (!hi3717a->rx[i] ) {
 			pr_err("avionics-hi3717a: Failed to allocate"
 			       " RX %d netdev\n", i);
@@ -1045,7 +827,7 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 		}
 		priv->irq = hi3717a->irq[i];
 
-		err = hi3717a_set_arinc429rx(&avionics_arinc429rx_default,
+		err = hi3717a_set_arinc717rx(&avionics_arinc717rx_default,
 					    hi3717a->rx[i]);
 		if (err) {
 			pr_err("avionics-hi3717a: Failed to set RX %d"
@@ -1139,14 +921,6 @@ static int hi3717a_probe(struct spi_device *spi)
 	if (err) {
 		pr_err("avionics-hi3717a: Failed to bring device"
 		       " out of reset: %d\n",err);
-		hi3717a_remove(spi);
-		return err;
-	}
-
-	err = hi3717a_set_aclk(spi);
-	if (err) {
-		pr_err("avionics-hi3717a: Failed to set"
-		       " aclk divider: %d\n", err);
 		hi3717a_remove(spi);
 		return err;
 	}

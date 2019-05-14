@@ -468,7 +468,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 	struct net_device_stats *stats;
 	struct hi3593_priv *priv;
 	struct sk_buff *skb;
-	__u8 status_cmd, rd_cmd, data[32*sizeof(__u32)];
+	__u8 status_cmd, rd_cmd, data[HI3593_MTU];
 	__u8 pl_cmd[3], pl_rd, pl[3];
 	const __u8 pl_bits[3] = {HI3593_PRIORITY_LABEL1,
 		HI3593_PRIORITY_LABEL2, HI3593_PRIORITY_LABEL3};
@@ -571,7 +571,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 	}
 
 	cnt = 0;
-	if (status & HI3593_FIFO_HALF) {
+	if (!(status & HI3593_FIFO_EMPTY)) {
 		for (i = 0; i < HI3593_MTU; i += sizeof(__u32)) {
 
 			err = spi_write_then_read(priv->spi, &rd_cmd,
