@@ -106,6 +106,7 @@ static int hi3717a_set_cntrl(struct hi3717a_priv *priv, __u8 value, __u8 mask,
 	}
 
 	if ((status&mask) == (value&mask)) {
+		mutex_unlock(priv->lock);
 		return 0;
 	}
 
@@ -703,7 +704,7 @@ static int hi3717a_reset(struct spi_device *spi)
 	gpio_set_value(hi3717a->reset_gpio, 1);
 
 	status = spi_w8r8(spi, HI3717A_OPCODE_RD_TXFSTAT);
-	if (status != 0x01) {
+	if (status != 0x20) {
 		pr_err("avionics-hi3717a: TX FIFO is not cleared: %x\n",
 		       status);
 		return -ENODEV;
@@ -730,6 +731,7 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 	for (i = 0; i < HI3717A_NUM_TX; i++) {
 		hi3717a->tx[i] = avionics_device_alloc(sizeof(*priv),
 						      &hi3717a_arinc717tx_ops);
+
 		if (!hi3717a->tx[i] ) {
 			pr_err("avionics-hi3717a: Failed to allocate"
 			       " TX %d netdev\n", i);
@@ -929,6 +931,8 @@ static int hi3717a_probe(struct spi_device *spi)
 		hi3717a_remove(spi);
 		return err;
 	}
+
+	pr_info("avionics-hi3717a: Added Device\n");
 
 	return 0;
 }
