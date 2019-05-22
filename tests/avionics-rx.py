@@ -16,11 +16,13 @@ SIOCGIFINDEX = 0x8933
 
 device = sys.argv[1]
 
+
 def get_addr(sock, channel):
     data = struct.pack("16si", channel.encode(), 0)
     res = fcntl.ioctl(sock, SIOCGIFINDEX, data)
     idx, = struct.unpack("16xi", res)
     return struct.pack("Hi", AF_AVIONICS, idx)
+
 
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 

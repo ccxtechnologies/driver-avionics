@@ -18,6 +18,8 @@ AVIONICS_RAW = 1
 SIOCGIFINDEX = 0x8933
 
 device = sys.argv[1]
+data = bytes((0x01, 0x02, 0x03, 0x04))
+
 
 def error_code_to_str(code):
     try:
@@ -32,11 +34,13 @@ def error_code_to_str(code):
 
     return "{} (errno {}): {}".format(name, code, description)
 
+
 def get_addr(sock, channel):
     data = struct.pack("16si", channel.encode(), 0)
     res = fcntl.ioctl(sock, SIOCGIFINDEX, data)
     idx, = struct.unpack("16xi", res)
     return struct.pack("Hi", AF_AVIONICS, idx)
+
 
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 
@@ -50,12 +54,8 @@ with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
     if err:
         raise OSError(err, "Failed to bind to socket")
 
-    # == send data example ==
-    sent = sock.send(bytes((
-        0x01,0x02,0x03,0xff,
-        0x04,0x05,0x06,0x01,
-        0x07,0x08,0x09,0x00,
-        )))
+    sent = sock.send(data)
+
     if sent < 0:
         print(f"Send failed {error_code_to_str(-sent)}")
         if sent == -1:
