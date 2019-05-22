@@ -63,6 +63,24 @@ static int device_changelink(struct net_device *dev,
 		return priv->ops->set_arinc429tx(&arinc429tx, dev);
 	}
 
+	if (data[IFLA_AVIONICS_ARINC717RX] && priv->ops &&
+	    priv->ops->set_arinc717rx) {
+		struct avionics_arinc717rx arinc717rx;
+
+		memcpy(&arinc717rx, nla_data(data[IFLA_AVIONICS_ARINC717RX]),
+		       sizeof(arinc717rx));
+		return priv->ops->set_arinc717rx(&arinc717rx, dev);
+	}
+
+	if (data[IFLA_AVIONICS_ARINC717TX] && priv->ops &&
+	    priv->ops->set_arinc717tx) {
+		struct avionics_arinc717tx arinc717tx;
+
+		memcpy(&arinc717tx, nla_data(data[IFLA_AVIONICS_ARINC717TX]),
+		       sizeof(arinc717tx));
+		return priv->ops->set_arinc717tx(&arinc717tx, dev);
+	}
+
 	return 0;
 }
 
@@ -81,6 +99,14 @@ static size_t device_get_size(const struct net_device *dev)
 
 	if(priv->ops && priv->ops->set_arinc429tx) {
 		size += nla_total_size(sizeof(struct avionics_arinc429tx));
+	}
+
+	if(priv->ops && priv->ops->set_arinc717rx) {
+		size += nla_total_size(sizeof(struct avionics_arinc717rx));
+	}
+
+	if(priv->ops && priv->ops->set_arinc717tx) {
+		size += nla_total_size(sizeof(struct avionics_arinc717tx));
 	}
 
 	return size;
@@ -129,6 +155,33 @@ static int device_fill_info(struct sk_buff *skb, const struct net_device *dev)
 
 	}
 
+	if (priv->ops && priv->ops->get_arinc717rx) {
+		struct avionics_arinc717rx arinc717rx;
+		priv->ops->get_arinc717rx(&arinc717rx, dev);
+
+		err = nla_put(skb, IFLA_AVIONICS_ARINC717RX,
+			      sizeof(arinc717rx), &arinc717rx);
+		if (err) {
+			pr_warn("avionics-device: Failed to set"
+				" ARINC-717 RX in nla\n");
+			return -EMSGSIZE;
+		}
+	}
+
+	if (priv->ops && priv->ops->get_arinc717tx) {
+		struct avionics_arinc717tx arinc717tx;
+		priv->ops->get_arinc717tx(&arinc717tx, dev);
+
+		err = nla_put(skb, IFLA_AVIONICS_ARINC717TX,
+			      sizeof(arinc717tx), &arinc717tx);
+		if (err) {
+			pr_warn("avionics-device: Failed to set"
+				" ARINC-717 TX in nla\n");
+			return -EMSGSIZE;
+		}
+
+	}
+
 	return 0;
 }
 
@@ -147,6 +200,12 @@ static const struct nla_policy device_policy[IFLA_AVIONICS_MAX + 1] = {
 	},
 	[IFLA_AVIONICS_ARINC429TX] = {
 		.len = sizeof(struct avionics_arinc429tx)
+	},
+	[IFLA_AVIONICS_ARINC717RX] = {
+		.len = sizeof(struct avionics_arinc717rx)
+	},
+	[IFLA_AVIONICS_ARINC717TX] = {
+		.len = sizeof(struct avionics_arinc717tx)
 	},
 };
 
