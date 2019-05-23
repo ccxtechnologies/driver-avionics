@@ -674,27 +674,23 @@ static void hi3593_tx_worker(struct work_struct *work)
 
 	mutex_lock(priv->lock);
 
-	status = spi_w8r8(priv->spi, rd_cmd);
-	if (status < 0) {
-		pr_err("avionics-hi3593: Failed to read status\n");
-		mutex_unlock(priv->lock);
-		return;
-	}
-
-	if ((status & HI3593_FIFO_FULL) ||
-	    ((skb->len > (1*sizeof(__u32))) &&
-	     (status & HI3593_FIFO_HALF)) ||
-	    ((skb->len > (16*sizeof(__u32))) &&
-	     !(status & HI3593_FIFO_EMPTY))) {
-		/* TODO: Come up with a better dropping algo. */
-		kfree_skb(skb);
-		stats->tx_dropped++;
-		mutex_unlock(priv->lock);
-		return;
-	}
 
 	wr_cmd[0] = HI3593_OPCODE_WR_TX_FIFO;
 	for (i = 0; i < skb->len; i = i + sizeof(__u32)) {
+		status = spi_w8r8(priv->spi, rd_cmd);
+		if (status < 0) {
+			pr_err("avionics-hi3593: Failed to read status\n");
+			mutex_unlock(priv->lock);
+			return;
+		}
+
+		if (status & HI3593_FIFO_FULL) {
+			kfree_skb(skb);
+			stats->tx_dropped++;
+			mutex_unlock(priv->lock);
+			return;
+		}
+
 		memcpy(&wr_cmd[1], &skb->data[i], sizeof(__u32));
 		err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
 		if (err < 0) {

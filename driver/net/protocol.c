@@ -126,6 +126,11 @@ int protocol_send_to_netdev(struct net_device *dev, struct sk_buff *skb)
 {
 	int err;
 
+	if (!dev->netdev_ops->ndo_start_xmit) {
+		pr_err("avionics-protocol: device doesn't support transmit\n");
+		return -ENODEV;
+	}
+
 	/* send to netdevice */
 	err = dev_queue_xmit(skb);
 	if (err > 0) {

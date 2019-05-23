@@ -173,7 +173,7 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 	} else if(rate->rate_hz == 98304) {
 		value = 7<<4;
 	} else {
-		pr_warn("avionics-hi3717a: speed must be 1536, 3072,"
+		pr_warn("avionics-hi3717a: speed must be  384, 768, 1536, 3072,"
 			" 6144, 12288, 24576, 49152, or 98304 Hz\n");
 		return -EINVAL;
 	}
@@ -218,6 +218,7 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 		pr_err("avionics-hi3717a: Failed to reset WRDCNT\n");
 		return err;
 	}
+	pr_info("avionics-hi3717a: Reloaded WRDCNT with 0x%x\n", wrdcnt);
 
 	err = hi3717a_set_cntrl(priv, fspin, 0xff,
 			  HI3717A_OPCODE_WR_FSPIN, HI3717A_OPCODE_RD_FSPIN);
@@ -225,6 +226,7 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 		pr_err("avionics-hi3717a: Failed to reset FSPIN\n");
 		return err;
 	}
+	pr_info("avionics-hi3717a: Reloaded FSPIN with 0x%x\n", fspin);
 
 	err = hi3717a_set_cntrl(priv, ctrl1, 0xff,
 			  HI3717A_OPCODE_WR_CTRL1, HI3717A_OPCODE_RD_CTRL1);
@@ -232,6 +234,7 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 		pr_err("avionics-hi3717a: Failed to reset CTRL1\n");
 		return err;
 	}
+	pr_info("avionics-hi3717a: Reloaded CNTRL1 with 0x%x\n", ctrl1);
 
 	err = hi3717a_set_cntrl(priv, (ctrl0&(~0x78)) | (value&0x78) , 0xff,
 			  HI3717A_OPCODE_WR_CTRL0, HI3717A_OPCODE_RD_CTRL0);
@@ -239,6 +242,8 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 		pr_err("avionics-hi3717a: Failed to set CTRL0\n");
 		return err;
 	}
+	pr_info("avionics-hi3717a: Reloaded CNTRL0 with 0x%x\n",
+		(ctrl0&(~0x78)) | (value&0x78));
 
 	return 0;
 }
@@ -456,6 +461,8 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	dev = priv->dev;
 	stats = &dev->stats;
 
+	printk("==> !!! <==\n");
+
 	priv = avionics_device_priv(dev);
 	if (!priv) {
 		pr_err("avionics-hi3717a: Failed to get private data\n");
@@ -478,6 +485,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 
 	cnt = 0;
 	rd_cmd = HI3717A_OPCODE_RD_RXFIFO;
+	printk("==> %x <==\n", status);
 	if (!(status & HI3717A_FIFO_EMPTY)) {
 		for (i = 0; i < HI3717A_MTU; i += sizeof(__u32)) {
 			err = spi_write_then_read(priv->spi, &rd_cmd,
@@ -564,23 +572,22 @@ static void hi3717a_tx_worker(struct work_struct *work)
 
 	mutex_lock(priv->lock);
 
-	status = hi3717a_get_cntrl(priv, HI3717A_OPCODE_RD_TXFSTAT);
-	if (status < 0) {
-		pr_err("avionics-hi3717a: Failed to read status\n");
-		mutex_unlock(priv->lock);
-		return;
-	}
-
-	if (status & 0x80) {
-		/* TODO: Come up with a better dropping algo. */
-		kfree_skb(skb);
-		stats->tx_dropped++;
-		mutex_unlock(priv->lock);
-		return;
-	}
-
 	wr_cmd[0] = HI3717A_OPCODE_WR_TXFIFO;
-	for (i = 0; i < skb->len; i = i + sizeof(__u16)) {
+	for (i = 0; i < skb->len; i = i + sizeof(__u32)) {
+		status = hi3717a_get_cntrl(priv, HI3717A_OPCODE_RD_TXFSTAT);
+		if (status < 0) {
+			pr_err("avionics-hi3717a: Failed to read status\n");
+			mutex_unlock(priv->lock);
+			return;
+		}
+
+		if (status & 0x80) {
+			kfree_skb(skb);
+			stats->tx_dropped++;
+			mutex_unlock(priv->lock);
+			return;
+		}
+
 		memcpy(&wr_cmd[1], &skb->data[i], sizeof(__u16));
 		err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
 		if (err < 0) {
@@ -698,6 +705,8 @@ static int hi3717a_reset(struct spi_device *spi)
 {
 	struct hi3717a *hi3717a = spi_get_drvdata(spi);
 	ssize_t status;
+	int err;
+	__u8 wr_cmd[2];
 
 	gpio_set_value(hi3717a->reset_gpio, 0);
 	usleep_range(10, 100);
@@ -708,6 +717,24 @@ static int hi3717a_reset(struct spi_device *spi)
 		pr_err("avionics-hi3717a: TX FIFO is not cleared: %x\n",
 		       status);
 		return -ENODEV;
+	}
+
+	wr_cmd[0] = HI3717A_OPCODE_WR_FSPIN;
+	wr_cmd[1] = 0x80; /* drive IRQ high when RX FIFO Half Full */
+	err = spi_write(spi, wr_cmd, sizeof(wr_cmd));
+	if (err < 0) {
+		pr_err("avionics-hi3717a: Failed to set RX IRQ Control: %d\n",
+		       err);
+		return err;
+	}
+
+	wr_cmd[0] = HI3717A_OPCODE_WR_CTRL0;
+	wr_cmd[1] = 0x02; /* default to 3.75us slew rate */
+	err = spi_write(spi, wr_cmd, sizeof(wr_cmd));
+	if (err < 0) {
+		pr_err("avionics-hi3717a: Failed to set Default Slew: %d\n",
+		       err);
+		return err;
 	}
 
 	pr_info("avionics-hi3717a: Device up\n");
