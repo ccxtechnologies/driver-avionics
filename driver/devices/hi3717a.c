@@ -438,8 +438,8 @@ static void hi3717a_tx_worker(struct work_struct *work)
 	struct hi3717a_priv *priv;
 	__u8 wr_cmd[3];
 	ssize_t status;
-	int err, i, delay;
-	__u16 *tx_buffer;
+	int err, i, delay, frame_size;
+	__u16 *tx_buffer, buffer;
 
 	priv = container_of(work, struct hi3717a_priv, worker);
 	dev = priv->dev;
@@ -453,15 +453,16 @@ static void hi3717a_tx_worker(struct work_struct *work)
 
 	tx_buffer = priv->tx_buffer;
 
-	delay = 1000000/(priv->tx_buffer_size/4/8);
+	frame_size = priv->tx_buffer_size/4;
+	delay = 1000000/(frame_size/8);
 	wr_cmd[0] = HI3717A_OPCODE_WR_TXFIFO;
 	i = 0;
 
 	/* Set frame markers */
-	tx_buffer[0] = 01107;
-	tx_buffer[priv->tx_buffer_size/4] = 02670;
-	tx_buffer[priv->tx_buffer_size/2] = 05107;
-	tx_buffer[(3*priv->tx_buffer_size)/4] = 06670;
+	tx_buffer[frame_size*0] = 01107;
+	tx_buffer[frame_size*1] = 02670;
+	tx_buffer[frame_size*2] = 05107;
+	tx_buffer[frame_size*3] = 06670;
 
 	while (atomic_read(priv->tx_enabled)) {
 
@@ -475,16 +476,13 @@ static void hi3717a_tx_worker(struct work_struct *work)
 		if (status & 0x80) {
 			usleep_range(delay, delay*2);
 		} else {
-			wr_cmd[1] = (tx_buffer[i]&0xff00)>>8;
-			wr_cmd[2] = (tx_buffer[i]&0x00ff);
+			buffer = tx_buffer[i];
+			wr_cmd[1] = (buffer&0xff00)>>8;
+			wr_cmd[2] = (buffer&0x00ff);
 
 			mutex_lock(priv->lock);
 			err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
 			mutex_unlock(priv->lock);
-
-			if (tx_buffer[i]) {
-				printk("<== %d %x ==>\n",i, tx_buffer[i]);
-			}
 
 			if (err < 0) {
 				pr_err("avionics-hi3717a: Failed to load"
@@ -569,7 +567,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	struct net_device_stats *stats;
 	struct hi3717a_priv *priv;
 	struct sk_buff *skb;
-	__u8 rd_cmd, data[HI3717A_MTU];
+	__u8 rd_cmd, data[HI3717A_MTU], buffer[4];
 	ssize_t status;
 	int err, i;
 
@@ -601,16 +599,30 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	i = 0;
 	while(!(status & HI3717A_RXFIFO_EMPTY) && (i < HI3717A_MTU)) {
 		err = spi_write_then_read(priv->spi, &rd_cmd, sizeof(rd_cmd),
-					  &data[i], sizeof(__u32));
+					  &buffer, 4);
 		if (unlikely(err)) {
 			pr_err("avionics-hi3717a: Failed to read from fifo\n");
 			mutex_unlock(priv->lock);
 			return;
 		}
 
-		printk("==> %d %x %x %x %x <==\n",i,
-		       data[i], data[i+1],
-		       data[i+2], data[i+3]);
+		#if defined(__LITTLE_ENDIAN)
+
+		data[i] = buffer[3];
+		data[i+1] = buffer[2];
+		data[i+2] = buffer[1];
+		data[i+3] = buffer[0];
+
+		#elif defined(__BIG_ENDIAN)
+
+		data[i] = buffer[0];
+		data[i+1] = buffer[1];
+		data[i+2] = buffer[2];
+		data[i+3] = buffer[3];
+
+		#else
+		#error Endianness not defined...
+		#endif
 
 		i += sizeof(__u32);
 
@@ -690,8 +702,8 @@ static netdev_tx_t hi3717a_tx_start_xmit(struct sk_buff *skb,
 	/* word format:
 	 * 0000yyyy yyyyyyyy xxxxxxxx xxxxx0zz
 	 * where y is the word to write (12 bits)
-	 * where x is the word count
-	 * and z if the frame */
+	 * where x is the word count starting at 1
+	 * and z if the frame starting at 0*/
 
 	for (i = 0; i < skb->len; i = i + sizeof(__u32)) {
 		memcpy(&data, &skb->data[i], sizeof(__u32));
@@ -700,8 +712,11 @@ static netdev_tx_t hi3717a_tx_start_xmit(struct sk_buff *skb,
 		word_count = (data&0x0000fff8)>>3;
 		frame = data&0x00000003;
 
-		offset = frame*word_count;
-		if (word_count && (offset < priv->tx_buffer_size)) {
+		offset = (frame * priv->tx_buffer_size/4) + (word_count-1);
+		printk("=== %x %x %x %d ===\n",
+		       word, word_count, frame, offset);
+
+		if ((word_count > 1) && (offset < priv->tx_buffer_size)) {
 			priv->tx_buffer[offset] = word;
 		}
 	}
