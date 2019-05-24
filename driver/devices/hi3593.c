@@ -468,7 +468,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 	struct net_device_stats *stats;
 	struct hi3593_priv *priv;
 	struct sk_buff *skb;
-	__u8 status_cmd, rd_cmd, data[HI3593_MTU];
+	__u8 status_cmd, rd_cmd, data[HI3593_MTU], buffer[4];
 	__u8 pl_cmd[3], pl_rd, pl[3];
 	const __u8 pl_bits[3] = {HI3593_PRIORITY_LABEL1,
 		HI3593_PRIORITY_LABEL2, HI3593_PRIORITY_LABEL3};
@@ -531,9 +531,9 @@ static void hi3593_rx_worker(struct work_struct *work)
 
 	for (i = 0; i < 3; i++) {
 		if (status & pl_bits[i]) {
-			data[3] = pl[2-i];
+			buffer[3] = pl[2-i];
 			err = spi_write_then_read(priv->spi, &pl_cmd[i],
-						  sizeof(pl_cmd[0]), data,
+						  sizeof(pl_cmd[0]), buffer,
 						  sizeof(__u32)-1);
 			if (unlikely(err)) {
 				pr_err("avionics-hi3593: Failed to"
@@ -543,10 +543,10 @@ static void hi3593_rx_worker(struct work_struct *work)
 			}
 
 			if(!priv->check_parity ||
-			   (priv->even_parity && (0x80&data[0])) ||
-			   ((0x80&data[0]) == 0x00)) {
+			   (priv->even_parity && (0x80&buffer[0])) ||
+			   ((0x80&buffer[0]) == 0x00)) {
 				if (priv->check_parity && priv->even_parity) {
-					data[0] &= 0x7f;
+					buffer[0] &= 0x7f;
 				}
 
 				skb = avionics_device_alloc_skb(dev,
@@ -557,6 +557,24 @@ static void hi3593_rx_worker(struct work_struct *work)
 					mutex_unlock(priv->lock);
 					return;
 				}
+
+				#if defined(__LITTLE_ENDIAN)
+
+				data[0] = buffer[3];
+				data[1] = buffer[2];
+				data[2] = buffer[1];
+				data[3] = buffer[0];
+
+				#elif defined(__BIG_ENDIAN)
+
+				data[0] = buffer[0];
+				data[1] = buffer[1];
+				data[2] = buffer[2];
+				data[3] = buffer[3];
+
+				#else
+				#error Endianness not defined...
+				#endif
 
 				skb_copy_to_linear_data(skb, data,
 							sizeof(__u32));
@@ -576,7 +594,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 
 			err = spi_write_then_read(priv->spi, &rd_cmd,
 						  sizeof(rd_cmd),
-						  &data[cnt],
+						  &buffer,
 						  sizeof(__u32));
 			if (unlikely(err)) {
 				pr_err("avionics-hi3593: Failed to"
@@ -586,12 +604,31 @@ static void hi3593_rx_worker(struct work_struct *work)
 			}
 
 			if(!priv->check_parity ||
-			   (priv->even_parity && (0x80&data[cnt])) ||
-			   ((0x80&data[cnt]) == 0x00)) {
+			   (priv->even_parity && (0x80&buffer[0])) ||
+			   ((0x80&buffer[0]) == 0x00)) {
 				cnt += sizeof(__u32);
 				if (priv->check_parity && priv->even_parity) {
-					data[cnt] &= 0x7f;
+					buffer[0] &= 0x7f;
 				}
+
+				#if defined(__LITTLE_ENDIAN)
+
+				data[cnt] = buffer[3];
+				data[cnt+1] = buffer[2];
+				data[cnt+2] = buffer[1];
+				data[cnt+3] = buffer[0];
+
+				#elif defined(__BIG_ENDIAN)
+
+				data[cnt] = buffer[0];
+				data[cnt+1] = buffer[1];
+				data[cnt+2] = buffer[2];
+				data[cnt+3] = buffer[3];
+
+				#else
+				#error Endianness not defined...
+				#endif
+
 			} else {
 				stats->rx_errors++;
 				stats->rx_crc_errors++;
@@ -691,7 +728,24 @@ static void hi3593_tx_worker(struct work_struct *work)
 			return;
 		}
 
-		memcpy(&wr_cmd[1], &skb->data[i], sizeof(__u32));
+		#if defined(__LITTLE_ENDIAN)
+
+		wr_cmd[1] = skb->data[i+3];
+		wr_cmd[2] = skb->data[i+2];
+		wr_cmd[3] = skb->data[i+1];
+		wr_cmd[4] = skb->data[i];
+
+		#elif defined(__BIG_ENDIAN)
+
+		wr_cmd[1] = skb->data[i];
+		wr_cmd[2] = skb->data[i+1];
+		wr_cmd[3] = skb->data[i+2];
+		wr_cmd[4] = skb->data[i+3];
+
+		#else
+		#error Endianness not defined...
+		#endif
+
 		err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
 		if (err < 0) {
 			pr_err("avionics-hi3593: Failed to load fifo\n");
