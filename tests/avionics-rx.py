@@ -40,6 +40,9 @@ def print_a717(value):
     if word:
         print(f"0x{word:03X} -- {count} -- {frame}")
 
+def print_a429(value):
+    print(f"0x{value:08X}")
+
 # == create socket ==
 with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
 
@@ -56,5 +59,5 @@ with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
         recv = sock.recv(4096)
         data = [int.from_bytes(recv[i:i+4], "little") for i in range(0,len(recv), 4)]
         for d in data:
-            print_a717(d)
+            print_a429(d)
 

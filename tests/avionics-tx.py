@@ -19,7 +19,7 @@ SIOCGIFINDEX = 0x8933
 
 device = sys.argv[1]
 
-# ARINC-717 Word Format
+# ARINC-717 Word Format (32 bits)
 # 0000yyyy yyyyyyyy xxxxxxxx xxxxx0zz
 #   where y is the word to write (12 bits)
 #   where x is the word count
@@ -29,6 +29,16 @@ a717_data = (
     ((2<<16)+(3<<3)+1).to_bytes(4, 'little') +
     ((3<<16)+(3<<3)+2).to_bytes(4, 'little')
     )
+
+# ARINC-429 Word Format (32 bits)
+# pyyyyyyy yyyyyyyy yyyyyyzz xxxxxxxx
+#   where p is the parityh bit
+#   where y is the word (21 bit)
+#   where z are the SD bits
+#   and y are the label bits (bit order dependant on the flip bits setting)
+a429_data = (
+        (0x01020304).to_bytes(4, 'little')
+        )
 
 def error_code_to_str(code):
     try:
@@ -63,7 +73,7 @@ with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
     if err:
         raise OSError(err, "Failed to bind to socket")
 
-    sent = sock.send(a717_data)
+    sent = sock.send(a429_data)
 
     if sent < 0:
         print(f"Send failed {error_code_to_str(-sent)}")
