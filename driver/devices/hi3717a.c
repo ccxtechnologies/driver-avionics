@@ -713,8 +713,6 @@ static netdev_tx_t hi3717a_tx_start_xmit(struct sk_buff *skb,
 		frame = data&0x00000003;
 
 		offset = (frame * priv->tx_buffer_size/4) + (word_count-1);
-		printk("=== %x %x %x %d ===\n",
-		       word, word_count, frame, offset);
 
 		if ((word_count > 1) && (offset < priv->tx_buffer_size)) {
 			priv->tx_buffer[offset] = word;

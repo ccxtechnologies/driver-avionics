@@ -534,7 +534,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 			buffer[3] = pl[2-i];
 			err = spi_write_then_read(priv->spi, &pl_cmd[i],
 						  sizeof(pl_cmd[0]), buffer,
-						  sizeof(__u32)-1);
+						  sizeof(buffer) - 1);
 			if (unlikely(err)) {
 				pr_err("avionics-hi3593: Failed to"
 				       " read priority label\n");
@@ -594,8 +594,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 
 			err = spi_write_then_read(priv->spi, &rd_cmd,
 						  sizeof(rd_cmd),
-						  &buffer,
-						  sizeof(__u32));
+						  buffer,
+						  sizeof(buffer));
 			if (unlikely(err)) {
 				pr_err("avionics-hi3593: Failed to"
 				       " read from fifo\n");
@@ -606,7 +606,6 @@ static void hi3593_rx_worker(struct work_struct *work)
 			if(!priv->check_parity ||
 			   (priv->even_parity && (0x80&buffer[0])) ||
 			   ((0x80&buffer[0]) == 0x00)) {
-				cnt += sizeof(__u32);
 				if (priv->check_parity && priv->even_parity) {
 					buffer[0] &= 0x7f;
 				}
@@ -628,6 +627,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 				#else
 				#error Endianness not defined...
 				#endif
+
+				cnt += sizeof(__u32);
 
 			} else {
 				stats->rx_errors++;
