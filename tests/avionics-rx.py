@@ -26,6 +26,20 @@ def get_addr(sock, channel):
 
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 
+def print_a717(value):
+    # ARINC-717 Word Format
+    # 0000yyyy yyyyyyyy xxxxxxxx xxxxx0zz
+    #   where y is the word to write (12 bits)
+    #   where x is the word count
+    #   and z if the frame
+
+    word = (value&0x0fff0000)>>16
+    count = (value&0x0000fff8)>>3
+    frame = (value&0x3)
+
+    if word:
+        print(f"0x{word:03X} -- {count} -- {frame}")
+
 # == create socket ==
 with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
 
@@ -38,5 +52,9 @@ with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
         raise OSError(err, "Failed to bind to socket")
 
     # == receive data example ==
-    recv = sock.recv(4096)
-    print(recv)
+    while True:
+        recv = sock.recv(4096)
+        data = [int.from_bytes(recv[i:i+4], "little") for i in range(0,len(recv), 4)]
+        for d in data:
+            print_a717(d)
+

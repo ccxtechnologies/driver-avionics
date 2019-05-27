@@ -414,14 +414,16 @@ def test_arinc429rx():
 
 def test_arinc717tx():
     print("==> Testing ARINC-717 TX Config <==")
-    set_arinc717tx("arinc717tx0", AVIONICS_ARINC717TX_SLEW)
+    set_arinc717tx("arinc717tx0", AVIONICS_ARINC717TX_SLEW&(1<<1) | AVIONICS_ARINC717TX_SELF_TEST)
     get_arinc717tx("arinc717tx0")
 
 
 def test_arinc717rx():
     print("==> Testing ARINC-717 RX Config <==")
-    set_arinc717rx("arinc717rx0", AVIONICS_ARINC717RX_BPRZ)
-    get_arinc717tx("arinc717rx0")
+    #set_arinc717rx("arinc717rx0", AVIONICS_ARINC717RX_NOSYNC)
+    #set_arinc717rx("arinc717rx0", AVIONICS_ARINC717RX_SFTSYNC)
+    set_arinc717rx("arinc717rx0", 0)
+    get_arinc717rx("arinc717rx0")
 
 
 if __name__ == "__main__":
