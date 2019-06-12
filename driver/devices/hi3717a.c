@@ -102,7 +102,7 @@ static int hi3717a_set_cntrl(struct hi3717a_priv *priv, __u8 value, __u8 mask,
 
 	status = hi3717a_get_cntrl(priv, rd_opcode);
 	if (status < 0) {
-		pr_err("avionics-hi3717a: Failed to read ctrl 0x%x: %d\n",
+		pr_err("avionics-hi3717a: Failed to read ctrl 0x%x: %zd\n",
 		       rd_opcode, status);
 		mutex_unlock(priv->lock);
 		return -ENODEV;
@@ -125,7 +125,7 @@ static int hi3717a_set_cntrl(struct hi3717a_priv *priv, __u8 value, __u8 mask,
 
 	status = hi3717a_get_cntrl(priv, rd_opcode);
 	if (status < 0) {
-		pr_err("avionics-hi3717a: Failed to read ctrl %d: %d\n",
+		pr_err("avionics-hi3717a: Failed to read ctrl %d: %zd\n",
 		       rd_opcode, status);
 		mutex_unlock(priv->lock);
 		return -ENODEV;
@@ -133,7 +133,7 @@ static int hi3717a_set_cntrl(struct hi3717a_priv *priv, __u8 value, __u8 mask,
 
 	if ((status&mask) != (value&mask)) {
 		pr_err("avionics-hi3717a: Failed to set"
-		       " ctrl %d to %d & %d : %d\n",
+		       " ctrl %d to %d & %d : %zd\n",
 		       wr_cmd[0], value, mask, status);
 		mutex_unlock(priv->lock);
 		return -ENODEV;
@@ -231,7 +231,7 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 		pr_err("avionics-hi3717a: Failed to reset WRDCNT\n");
 		return err;
 	}
-	pr_info("avionics-hi3717a: Reloaded WRDCNT with 0x%x\n", wrdcnt);
+	pr_info("avionics-hi3717a: Reloaded WRDCNT with 0x%zx\n", wrdcnt);
 
 	err = hi3717a_set_cntrl(priv, fspin, 0xff,
 			  HI3717A_OPCODE_WR_FSPIN, HI3717A_OPCODE_RD_FSPIN);
@@ -239,7 +239,7 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 		pr_err("avionics-hi3717a: Failed to reset FSPIN\n");
 		return err;
 	}
-	pr_info("avionics-hi3717a: Reloaded FSPIN with 0x%x\n", fspin);
+	pr_info("avionics-hi3717a: Reloaded FSPIN with 0x%zx\n", fspin);
 
 	err = hi3717a_set_cntrl(priv, ctrl1, 0xff,
 			  HI3717A_OPCODE_WR_CTRL1, HI3717A_OPCODE_RD_CTRL1);
@@ -247,7 +247,7 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 		pr_err("avionics-hi3717a: Failed to reset CTRL1\n");
 		return err;
 	}
-	pr_info("avionics-hi3717a: Reloaded CNTRL1 with 0x%x\n", ctrl1);
+	pr_info("avionics-hi3717a: Reloaded CNTRL1 with 0x%zx\n", ctrl1);
 
 	err = hi3717a_set_cntrl(priv, (ctrl0&(~0x78)) | (value&0x78) , 0xff,
 			  HI3717A_OPCODE_WR_CTRL0, HI3717A_OPCODE_RD_CTRL0);
@@ -255,7 +255,7 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 		pr_err("avionics-hi3717a: Failed to set CTRL0\n");
 		return err;
 	}
-	pr_info("avionics-hi3717a: Reloaded CNTRL0 with 0x%x\n",
+	pr_info("avionics-hi3717a: Reloaded CNTRL0 with 0x%zx\n",
 		(ctrl0&(~0x78)) | (value&0x78));
 
 	return 0;
@@ -275,7 +275,7 @@ static void hi3717a_get_rate(struct avionics_rate *rate,
 
 	status = hi3717a_get_cntrl(priv, HI3717A_OPCODE_RD_CTRL0);
 	if (status < 0) {
-		pr_err("avionics-hi3717a: Failed to get rate: %d\n", status);
+		pr_err("avionics-hi3717a: Failed to get rate: %zd\n", status);
 	} else if(status&0x0008) {
 		rate->rate_hz = 384;
 	} else if((status&0x0070) == 0) {
@@ -425,7 +425,7 @@ static struct avionics_ops hi3717a_arinc717tx_ops = {
 static int hi3717a_change_mtu(struct net_device *dev, int mtu)
 {
 	if (mtu != HI3717A_MTU) {
-		pr_err("avionics-hi3717a: MTU must be %d.\n", HI3717A_MTU);
+		pr_err("avionics-hi3717a: MTU must be %zd.\n", HI3717A_MTU);
 		return -EINVAL;
 	}
 
@@ -796,7 +796,7 @@ static int hi3717a_reset(struct spi_device *spi)
 
 	status = spi_w8r8(spi, HI3717A_OPCODE_RD_TXFSTAT);
 	if (status != 0x20) {
-		pr_err("avionics-hi3717a: TX FIFO is not cleared: %x\n",
+		pr_err("avionics-hi3717a: TX FIFO is not cleared: %zx\n",
 		       status);
 		return -ENODEV;
 	}

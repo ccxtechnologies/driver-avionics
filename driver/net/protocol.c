@@ -15,6 +15,7 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <linux/version.h>
 #include <linux/net.h>
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
@@ -148,8 +149,13 @@ int protocol_send_to_netdev(struct net_device *dev, struct sk_buff *skb)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,17,0)
 int protocol_getname(struct socket *sock, struct sockaddr *saddr,
 		     int *len, int peer)
+#else
+int protocol_getname(struct socket *sock, struct sockaddr *saddr,
+		     int peer)
+#endif
 {
 	DECLARE_SOCKADDR(struct sockaddr_avionics *, addr, saddr);
 	struct sock *sk = sock->sk;
@@ -163,9 +169,12 @@ int protocol_getname(struct socket *sock, struct sockaddr *saddr,
 	addr->avionics_family  = AF_AVIONICS;
 	addr->ifindex = psk->ifindex;
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,17,0)
 	*len = sizeof(*addr);
-
 	return 0;
+#else
+	return sizeof(*addr);
+#endif
 }
 
 int protocol_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)

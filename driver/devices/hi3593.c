@@ -140,7 +140,8 @@ static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 
 	status = hi3593_get_cntrl(priv);
 	if (status < 0) {
-		pr_err("avionics-hi3593: Failed to read control: %d\n", status);
+		pr_err("avionics-hi3593: Failed to read control: %zd\n",
+		       status);
 		mutex_unlock(priv->lock);
 		return -ENODEV;
 	}
@@ -167,14 +168,16 @@ static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 
 	status = hi3593_get_cntrl(priv);
 	if (status < 0) {
-		pr_err("avionics-hi3593: Failed to read control: %d\n", status);
+		pr_err("avionics-hi3593: Failed to read control: %zd\n",
+		       status);
 		mutex_unlock(priv->lock);
 		return -ENODEV;
 	}
 
 	if ((status&mask) != (value&mask)) {
 		pr_err("avionics-hi3593: Failed to set"
-		       " control to 0x%x & 0x%x : 0x%x\n", value, mask, status);
+		       " control to 0x%x & 0x%x : 0x%zx\n",
+		       value, mask, status);
 		mutex_unlock(priv->lock);
 		return -ENODEV;
 	}
@@ -228,7 +231,7 @@ static void hi3593_get_rate(struct avionics_rate *rate,
 
 	status = hi3593_get_cntrl(priv);
 	if (status < 0) {
-		pr_err("avionics-hi3593: Failed to get rate: %d\n", status);
+		pr_err("avionics-hi3593: Failed to get rate: %zd\n", status);
 	} else if(status&0x0001) {
 		rate->rate_hz = 12500;
 	} else {
@@ -252,7 +255,8 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 
 	status = hi3593_get_cntrl(priv);
 	if (status < 0) {
-		pr_err("avionics-hi3593: Failed to get rx cntrl: %d\n", status);
+		pr_err("avionics-hi3593: Failed to get rx cntrl: %zd\n",
+		       status);
 	} else {
 		config->flags = (status&0xfe) | priv->even_parity;
 	}
@@ -357,7 +361,8 @@ static void hi3593_get_arinc429tx(struct avionics_arinc429tx *config,
 
 	status = hi3593_get_cntrl(priv);
 	if (status < 0) {
-		pr_err("avionics-hi3593: Failed to get tx cntrl: %d\n", status);
+		pr_err("avionics-hi3593: Failed to get tx cntrl: %zd\n",
+		       status);
 	} else {
 		config->flags = status&0xfe;
 	}
@@ -404,7 +409,7 @@ static struct avionics_ops hi3593_arinc429tx_ops = {
 static int hi3593_change_mtu(struct net_device *dev, int mtu)
 {
 	if (mtu != HI3593_MTU) {
-		pr_err("avionics-hi3593: MTU must be %d.\n", HI3593_MTU);
+		pr_err("avionics-hi3593: MTU must be %zd.\n", HI3593_MTU);
 		return -EINVAL;
 	}
 
@@ -903,7 +908,8 @@ static int hi3593_reset(struct spi_device *spi)
 
 	status = spi_w8r8(spi, HI3593_OPCODE_RD_TX_STATUS);
 	if (status != 0x01) {
-		pr_err("avionics-hi3593: TX FIFO is not cleared: %x\n", status);
+		pr_err("avionics-hi3593: TX FIFO is not cleared: %zx\n",
+		       status);
 		return -ENODEV;
 	}
 
@@ -945,12 +951,12 @@ static int hi3593_set_aclk(struct spi_device *spi)
 
 	status = spi_w8r8(spi, HI3593_OPCODE_RD_ALCK);
 	if (status != cmd[1]) {
-		pr_err("avionics-hi3593: ALCK not set to 0x%x: 0x%x\n",
+		pr_err("avionics-hi3593: ALCK not set to 0x%x: 0x%zx\n",
 		       cmd[1], status);
 		return -ENODEV;
 	}
 
-	pr_info("avionics-hi3593: ALCK set to 0x%x\n", status);
+	pr_info("avionics-hi3593: ALCK set to 0x%zx\n", status);
 
 	return 0;
 }

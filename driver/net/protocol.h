@@ -15,6 +15,7 @@
 #define __AVIONICS_PROTOCOL_H__
 
 #include <net/sock.h>
+#include <linux/version.h>
 
 struct protocol_sock {
 	struct sock sk; /* must be first */
@@ -32,8 +33,13 @@ int protocol_get_dev_from_msg(struct protocol_sock *psk,
 			      struct net_device **dev);
 int protocol_send_to_netdev(struct net_device *dev, struct sk_buff *skb);
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,17,0)
 int protocol_getname(struct socket *sock, struct sockaddr *saddr,
 		     int *len, int peer);
+#else
+int protocol_getname(struct socket *sock, struct sockaddr *saddr,
+		     int peer);
+#endif
 int protocol_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);
 int protocol_release(struct socket *sock);
 int protocol_bind(struct socket *sock, struct sockaddr *saddr, int len);
