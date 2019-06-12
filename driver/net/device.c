@@ -15,6 +15,7 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <linux/version.h>
 #include <linux/net.h>
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
@@ -30,8 +31,14 @@ struct device_priv {
 	__u8 private[0];
 };
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,13,0)
 static int device_changelink(struct net_device *dev,
 			     struct nlattr *tb[], struct nlattr *data[])
+#else
+static int device_changelink(struct net_device *dev,
+			     struct nlattr *tb[], struct nlattr *data[],
+			     struct netlink_ext_ack *extack)
+#endif
 {
 	struct device_priv *priv = netdev_priv(dev);
 
@@ -185,8 +192,14 @@ static int device_fill_info(struct sk_buff *skb, const struct net_device *dev)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,13,0)
 static int device_newlink(struct net *src_net, struct net_device *dev,
 			    struct nlattr *tb[], struct nlattr *data[])
+#else
+static int device_newlink(struct net *src_net, struct net_device *dev,
+			    struct nlattr *tb[], struct nlattr *data[],
+			    struct netlink_ext_ack *extack)
+#endif
 {
 	return -EOPNOTSUPP;
 }

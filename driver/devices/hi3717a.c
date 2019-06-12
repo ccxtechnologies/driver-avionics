@@ -25,6 +25,7 @@
 #include <linux/of_gpio.h>
 #include <linux/of_irq.h>
 #include <linux/atomic.h>
+#include <linux/interrupt.h>
 
 #include "avionics.h"
 #include "avionics-device.h"

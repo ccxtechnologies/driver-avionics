@@ -15,6 +15,7 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <net/sock.h>
@@ -111,7 +112,11 @@ static void lb_rtnl_link_setup(struct net_device *dev)
 	dev->tx_queue_len	= 0;
 	dev->flags		= IFF_NOARP;
 	dev->netdev_ops		= &lb_net_device_ops;
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,11,0)
 	dev->destructor		= free_netdev;
+#else
+	dev->needs_free_netdev	= true;
+#endif
 }
 
 static struct rtnl_link_ops lb_rtnl_link_ops __read_mostly = {
