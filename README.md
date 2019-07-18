@@ -13,5 +13,5 @@ unused indexes for Ash. Refer to arinc429.h for more details on this ugly hack.
 
 # Kernel Version
 
-All development and testing was done on 4.9, this can probably work on an different
-kernels but it will probably require some updates.
+All development and testing was done on kernel versions 4.9 to 5.2, this driver will probably work on
+different kernels but may require some updates.
