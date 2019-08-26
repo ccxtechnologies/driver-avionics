@@ -179,11 +179,15 @@ int protocol_getname(struct socket *sock, struct sockaddr *saddr,
 
 int protocol_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,2,0)
 	struct sock *sk = sock->sk;
+#endif
 
 	switch (cmd) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,2,0)
 	case SIOCGSTAMP:
 		return sock_get_timestamp(sk, (struct timeval __user *)arg);
+#endif
 
 	default:
 		return -ENOIOCTLCMD;
