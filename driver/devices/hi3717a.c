@@ -33,9 +33,10 @@
 MODULE_DESCRIPTION("HOLT Hi-3717A ARINC-717 Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
-MODULE_VERSION("1.0.0");
+MODULE_VERSION("1.1.0");
 
-#define HI3717A_MTU	(32*sizeof(__u32)) /* 32 word FIFO, includes word count */
+#define HI3717A_FIFO_DEPTH		32
+#define HI3717A_MTU	(HI3717A_FIFO_DEPTH*sizeof(__u32))
 
 #define HI3717A_OPCODE_RD_CTRL0		0xe4
 #define HI3717A_OPCODE_WR_CTRL0		0x64
@@ -281,7 +282,7 @@ static void hi3717a_get_rate(struct avionics_rate *rate,
 	} else if((status&0x0070) == 0) {
 		rate->rate_hz = 768;
 	} else if((status&0x0070) == (1<<4)) {
-		rate->rate_hz = 1536;
+		rate->rate_hz = 1535;
 	} else if((status&0x0070) == (2<<4)) {
 		rate->rate_hz = 3072;
 	} else if((status&0x0070) == (3<<4)) {
@@ -562,15 +563,63 @@ static int hi3717a_tx_stop(struct net_device *dev)
 	return 0;
 }
 
+static int hi3717a_empty_fifo(struct hi3717a_priv *priv,
+		__u32 *values, unsigned num_reads)
+{
+	int i, status;
+	struct spi_message message;
+	struct spi_transfer *opcodes, *reads;
+	__u8 rd_cmd = HI3717A_OPCODE_RD_RXFIFO;
+
+	opcodes = kzalloc(num_reads*sizeof(struct spi_transfer), GFP_KERNEL);
+	reads = kzalloc(num_reads*sizeof(struct spi_transfer), GFP_KERNEL);
+
+	spi_message_init(&message);
+
+	for(i = 0; i < num_reads; i++) {
+		opcodes[i].len = 1;
+		opcodes[i].tx_buf = &rd_cmd;
+	}
+
+	for(i = 0; i < num_reads; i++) {
+		reads[i].len = 4;
+		reads[i].rx_buf = &values[i];
+	}
+
+	for(i = 0; i < (num_reads-1); i++) {
+		reads[i].cs_change = 1;
+	}
+
+	for(i = 0; i < num_reads; i++) {
+		spi_message_add_tail(&opcodes[i], &message);
+		spi_message_add_tail(&reads[i], &message);
+	}
+
+	status = spi_sync(priv->spi, &message);
+
+	for(i = 0; i < num_reads; i++) {
+		values[i] = be32_to_cpu(values[i]);
+	}
+
+	kfree(opcodes);
+	kfree(reads);
+
+	if(status < 0) {
+		return status;
+	} else {
+		return num_reads;
+	}
+}
+
 static void hi3717a_rx_worker(struct work_struct *work)
 {
 	struct net_device *dev;
 	struct net_device_stats *stats;
 	struct hi3717a_priv *priv;
 	struct sk_buff *skb;
-	__u8 rd_cmd, data[HI3717A_MTU], buffer[4];
+	__u32 data[HI3717A_FIFO_DEPTH*2];
 	ssize_t status;
-	int err, i;
+	int count;
 
 	priv = container_of(work, struct hi3717a_priv, worker);
 	dev = priv->dev;
@@ -592,40 +641,48 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	}
 
 	if (status & HI3717A_RXFIFO_OVF) {
+		pr_err("avionics-hi3717a: RX FIFO Overflow 1\n");
 		stats->rx_errors++;
 		stats->rx_fifo_errors++;
 	}
 
-	rd_cmd = HI3717A_OPCODE_RD_RXFIFO;
-	i = 0;
-	while(!(status & HI3717A_RXFIFO_EMPTY) && (i < HI3717A_MTU)) {
-		err = spi_write_then_read(priv->spi, &rd_cmd, sizeof(rd_cmd),
-					  &buffer, 4);
-		if (unlikely(err)) {
-			pr_err("avionics-hi3717a: Failed to read from fifo\n");
+	if(status & HI3717A_RXFIFO_EMPTY) {
+		mutex_unlock(priv->lock);
+		return;
+	}
+
+	status = hi3717a_empty_fifo(priv, data, 16);
+	if (unlikely(status < 0)) {
+		pr_err("avionics-hi3717a: Failed to read fifo block\n");
+		mutex_unlock(priv->lock);
+		return;
+	}
+	count = status;
+
+	status = hi3717a_get_cntrl(priv, HI3717A_OPCODE_RD_RXFSTAT);
+	if (unlikely(status < 0)) {
+		pr_err("avionics-hi3717a: Failed to read status\n");
+		mutex_unlock(priv->lock);
+		return;
+	}
+
+	if (status & HI3717A_RXFIFO_OVF) {
+		pr_err("avionics-hi3717a: RX FIFO Overflow 2\n");
+		stats->rx_errors++;
+		stats->rx_fifo_errors++;
+	}
+
+	while(!(status & HI3717A_RXFIFO_EMPTY) &&
+	      (count < (HI3717A_FIFO_DEPTH*2))) {
+
+		status = hi3717a_empty_fifo(priv, &data[count], 1);
+		if (unlikely(status < 0)) {
+			pr_err("avionics-hi3717a: Failed to read fifo block\n");
 			mutex_unlock(priv->lock);
 			return;
 		}
-
-		#if defined(__LITTLE_ENDIAN)
-
-		data[i] = buffer[3];
-		data[i+1] = buffer[2];
-		data[i+2] = buffer[1];
-		data[i+3] = buffer[0];
-
-		#elif defined(__BIG_ENDIAN)
-
-		data[i] = buffer[0];
-		data[i+1] = buffer[1];
-		data[i+2] = buffer[2];
-		data[i+3] = buffer[3];
-
-		#else
-		#error Endianness not defined...
-		#endif
-
-		i += sizeof(__u32);
+		data[count] = count<<8;
+		count += status;
 
 		status = hi3717a_get_cntrl(priv, HI3717A_OPCODE_RD_RXFSTAT);
 		if (unlikely(status < 0)) {
@@ -636,16 +693,16 @@ static void hi3717a_rx_worker(struct work_struct *work)
 
 	}
 
-	if (i) {
-		skb = avionics_device_alloc_skb(dev, i);
+	if (count) {
+		skb = avionics_device_alloc_skb(dev, count*sizeof(__u32));
 		if (unlikely(!skb)) {
-			pr_err("avionics-lb: Failed to"
+			pr_err("avionics-hi3717a: Failed to"
 			       " allocate RX buffer\n");
 			mutex_unlock(priv->lock);
 			return;
 		}
 
-		skb_copy_to_linear_data(skb, data, i);
+		skb_copy_to_linear_data(skb, (void*)data, count*sizeof(__u32));
 
 		stats->rx_packets++;
 		stats->rx_bytes += skb->len;
@@ -654,6 +711,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	}
 
 	mutex_unlock(priv->lock);
+	enable_irq(priv->irq);
 
 }
 
@@ -661,6 +719,12 @@ static irqreturn_t hi3717a_rx_irq(int irq, void *data)
 {
 	struct hi3717a_priv *priv = data;
 
+	if (unlikely(irq != priv->irq)) {
+		pr_err("avionics-hi3717a: Unexpected irq %d\n", irq);
+		return IRQ_HANDLED;
+	}
+
+	disable_irq_nosync(priv->irq);
 	queue_work(priv->wq, &priv->worker);
 	return IRQ_HANDLED;
 }
@@ -853,7 +917,7 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 		priv->reset_gpio = hi3717a->reset_gpio;
 		priv->tx_buffer = NULL;
 		priv->tx_enabled = &hi3717a->tx_enabled;
-		priv->wq = alloc_workqueue("%s", WQ_FREEZABLE | WQ_MEM_RECLAIM,
+		priv->wq = alloc_workqueue("%s", WQ_HIGHPRI,
 					   0, hi3717a->tx[i]->name);
 		if (!priv->wq) {
 			pr_err("avionics-hi3717a: Failed to allocate"
@@ -904,7 +968,7 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 		priv->reset_gpio = hi3717a->reset_gpio;
 		priv->tx_enabled = &hi3717a->tx_enabled;
 		priv->tx_buffer = NULL;
-		priv->wq = alloc_workqueue("%s", WQ_FREEZABLE | WQ_MEM_RECLAIM,
+		priv->wq = alloc_workqueue("%s", WQ_HIGHPRI,
 					   0, hi3717a->rx[i]->name);
 		if (!priv->wq) {
 			pr_err("avionics-hi3717a: Failed to allocate"
