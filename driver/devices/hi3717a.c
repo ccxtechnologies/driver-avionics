@@ -619,7 +619,9 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	struct sk_buff *skb;
 	__u32 data[HI3717A_FIFO_DEPTH*2];
 	ssize_t status;
-	int count;
+	int count = 0;
+	__u8 rd_cmd = HI3717A_OPCODE_RD_RXFIFO;
+	unsigned num_reads;
 
 	priv = container_of(work, struct hi3717a_priv, worker);
 	dev = priv->dev;
@@ -649,35 +651,24 @@ static void hi3717a_rx_worker(struct work_struct *work)
 		goto done;
 	}
 
-	status = hi3717a_empty_fifo(priv, data, 16);
-	if (unlikely(status < 0)) {
-		pr_err("avionics-hi3717a: Failed to read fifo block\n");
-		goto done;
-	}
-	count = status;
-
-	status = hi3717a_get_cntrl(priv, HI3717A_OPCODE_RD_RXFSTAT);
-	if (unlikely(status < 0)) {
-		pr_err("avionics-hi3717a: Failed to read status\n");
-		goto done;
-	}
-
-	if (status & HI3717A_RXFIFO_OVF) {
-		pr_err("avionics-hi3717a: RX FIFO Overflow 2\n");
-		stats->rx_errors++;
-		stats->rx_fifo_errors++;
-	}
-
-	while(!(status & HI3717A_RXFIFO_EMPTY) &&
-	      (count < (HI3717A_FIFO_DEPTH*2))) {
-
-		status = hi3717a_empty_fifo(priv, &data[count], 1);
+	if(status & HI3717A_RXFIFO_FULL) {
+		status = hi3717a_empty_fifo(priv, data, 32);
 		if (unlikely(status < 0)) {
 			pr_err("avionics-hi3717a: Failed to read fifo block\n");
 			goto done;
 		}
-		data[count] = count<<8;
-		count += status;
+		count = status;
+	} else if(status & HI3717A_RXFIFO_HALF) {
+		status = hi3717a_empty_fifo(priv, data, 16);
+		if (unlikely(status < 0)) {
+			pr_err("avionics-hi3717a: Failed to read fifo block\n");
+			goto done;
+		}
+		count = status;
+	}
+
+
+	while(count < (HI3717A_FIFO_DEPTH*2)) {
 
 		status = hi3717a_get_cntrl(priv, HI3717A_OPCODE_RD_RXFSTAT);
 		if (unlikely(status < 0)) {
@@ -685,23 +676,34 @@ static void hi3717a_rx_worker(struct work_struct *work)
 			goto done;
 		}
 
-	}
-
-	if (count) {
-		skb = avionics_device_alloc_skb(dev, count*sizeof(__u32));
-		if (unlikely(!skb)) {
-			pr_err("avionics-hi3717a: Failed to"
-			       " allocate RX buffer\n");
-			goto done;
+		if (status & HI3717A_RXFIFO_EMPTY) {
+			break;
 		}
 
-		skb_copy_to_linear_data(skb, (void*)data, count*sizeof(__u32));
+		status = spi_write_then_read(priv->spi, &rd_cmd, sizeof(rd_cmd),
+					  &data[count], sizeof(data[0]));
+		if (unlikely(status)) {
+			pr_err("avionics-hi3717a: Failed to read from fifo\n");
+			goto done;
+		}
+		data[count] = be32_to_cpu(data[count]);
+		count++;
 
-		stats->rx_packets++;
-		stats->rx_bytes += skb->len;
-
-		netif_rx_ni(skb);
 	}
+
+	skb = avionics_device_alloc_skb(dev, count*sizeof(__u32));
+	if (unlikely(!skb)) {
+		pr_err("avionics-hi3717a: Failed to"
+		       " allocate RX buffer\n");
+		goto done;
+	}
+
+	skb_copy_to_linear_data(skb, (void*)data, count*sizeof(__u32));
+
+	stats->rx_packets++;
+	stats->rx_bytes += skb->len;
+
+	netif_rx_ni(skb);
 
 done:
 	mutex_unlock(priv->lock);
