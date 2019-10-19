@@ -625,19 +625,18 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	dev = priv->dev;
 	stats = &dev->stats;
 
+	mutex_lock(priv->lock);
+
 	priv = avionics_device_priv(dev);
 	if (!priv) {
 		pr_err("avionics-hi3717a: Failed to get private data\n");
-		return;
+		goto done;
 	}
-
-	mutex_lock(priv->lock);
 
 	status = hi3717a_get_cntrl(priv, HI3717A_OPCODE_RD_RXFSTAT);
 	if (status < 0) {
 		pr_err("avionics-hi3717a: Failed to read status\n");
-		mutex_unlock(priv->lock);
-		return;
+		goto done;
 	}
 
 	if (status & HI3717A_RXFIFO_OVF) {
@@ -647,23 +646,20 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	}
 
 	if(status & HI3717A_RXFIFO_EMPTY) {
-		mutex_unlock(priv->lock);
-		return;
+		goto done;
 	}
 
 	status = hi3717a_empty_fifo(priv, data, 16);
 	if (unlikely(status < 0)) {
 		pr_err("avionics-hi3717a: Failed to read fifo block\n");
-		mutex_unlock(priv->lock);
-		return;
+		goto done;
 	}
 	count = status;
 
 	status = hi3717a_get_cntrl(priv, HI3717A_OPCODE_RD_RXFSTAT);
 	if (unlikely(status < 0)) {
 		pr_err("avionics-hi3717a: Failed to read status\n");
-		mutex_unlock(priv->lock);
-		return;
+		goto done;
 	}
 
 	if (status & HI3717A_RXFIFO_OVF) {
@@ -678,8 +674,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 		status = hi3717a_empty_fifo(priv, &data[count], 1);
 		if (unlikely(status < 0)) {
 			pr_err("avionics-hi3717a: Failed to read fifo block\n");
-			mutex_unlock(priv->lock);
-			return;
+			goto done;
 		}
 		data[count] = count<<8;
 		count += status;
@@ -687,8 +682,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 		status = hi3717a_get_cntrl(priv, HI3717A_OPCODE_RD_RXFSTAT);
 		if (unlikely(status < 0)) {
 			pr_err("avionics-hi3717a: Failed to read status\n");
-			mutex_unlock(priv->lock);
-			return;
+			goto done;
 		}
 
 	}
@@ -698,8 +692,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 		if (unlikely(!skb)) {
 			pr_err("avionics-hi3717a: Failed to"
 			       " allocate RX buffer\n");
-			mutex_unlock(priv->lock);
-			return;
+			goto done;
 		}
 
 		skb_copy_to_linear_data(skb, (void*)data, count*sizeof(__u32));
@@ -710,6 +703,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 		netif_rx_ni(skb);
 	}
 
+done:
 	mutex_unlock(priv->lock);
 	enable_irq(priv->irq);
 
