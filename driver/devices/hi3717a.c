@@ -638,7 +638,7 @@ static int hi3717a_rxfifo_read(struct hi3717a_priv *priv,
 
 	for(i = 0; i < num_reads; i++) {
 		opcodes[i].len = 5;
-		opcodes[i].tx_buf = &rd_cmd;
+		opcodes[i].tx_buf = rd_cmd;
 		opcodes[i].rx_buf = &buffer[i*5];
 		if(i < (num_reads-1)) {
 			opcodes[i].cs_change = 1;
@@ -720,7 +720,7 @@ static int hi3717a_rx_send_upstream(struct hi3717a_priv *priv, __u32 *data,
 
 static void hi3717a_rx_worker(struct work_struct *work)
 {
-	const int words_per = 20;
+	const int words_per = 16;
 	struct hi3717a_priv *priv;
 	struct net_device *dev;
 	__u32 data[HI3717A_FIFO_DEPTH*3];
