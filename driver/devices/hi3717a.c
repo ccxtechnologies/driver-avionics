@@ -632,8 +632,8 @@ static int hi3717a_rxfifo_read(struct hi3717a_priv *priv,
 	__u32 vbuffer;
 
 	spi_message_init(&message);
-
 	memset(opcodes, 0, sizeof(opcodes));
+
 	rd_cmd[0] = HI3717A_OPCODE_RD_RXFIFO;
 
 	for(i = 0; i < num_reads; i++) {
@@ -663,30 +663,53 @@ static int hi3717a_rxfifo_read(struct hi3717a_priv *priv,
 
 static int hi3717a_rxfifo_read_all(struct hi3717a_priv *priv, __u32 *data)
 {
-	int count = 0;
-	ssize_t status;
-	__u8 rd_cmd = HI3717A_OPCODE_RD_RXFIFO;
+	int count = 0, status;
+	struct spi_message message;
+	struct spi_transfer opcodes[3];
+	__u8 rd_cmd[5], rd_buffer[5], stats_cmd[2], stats_buffer[2][2];
+	__u32 vbuffer;
+
+	spi_message_init(&message);
+	memset(opcodes, 0, sizeof(opcodes));
+
+	stats_cmd[0] = HI3717A_OPCODE_RD_RXFSTAT;
+	rd_cmd[0] = HI3717A_OPCODE_RD_RXFIFO;
+
+	opcodes[0].len = 2;
+	opcodes[0].tx_buf = stats_cmd;
+	opcodes[0].rx_buf = stats_buffer[0];
+	opcodes[0].cs_change = 1;
+	spi_message_add_tail(&opcodes[0], &message);
+
+	opcodes[1].len = 5;
+	opcodes[1].tx_buf = rd_cmd;
+	opcodes[1].rx_buf = rd_buffer;
+	opcodes[1].cs_change = 1;
+	spi_message_add_tail(&opcodes[1], &message);
+
+	opcodes[2].len = 2;
+	opcodes[2].tx_buf = stats_cmd;
+	opcodes[2].rx_buf = stats_buffer[1];
+	spi_message_add_tail(&opcodes[2], &message);
 
 	while(count < HI3717A_FIFO_DEPTH) {
-		status = hi3717a_rxfifo_is_empty(priv);
-		if (unlikely(status < 0)) {
-			pr_err("avionics-hi3717a: Failed to read status\n");
+		status = spi_sync(priv->spi, &message);
+		if(status < 0) {
 			return status;
 		}
 
-		if (status) {
+		if(!(stats_buffer[0][1] & HI3717A_RXFIFO_EMPTY)) {
+			vbuffer = rd_buffer[1] + (rd_buffer[2]<<8) +
+				(rd_buffer[3]<<16) + (rd_buffer[4]<<24);
+			data[count] = be32_to_cpu(vbuffer);
+
+			count++;
+		}
+
+		if(stats_buffer[1][1] & HI3717A_RXFIFO_EMPTY) {
 			break;
 		}
 
-		status = spi_write_then_read(priv->spi, &rd_cmd, sizeof(rd_cmd),
-					  &data[count], sizeof(data[0]));
-		if (unlikely(status)) {
-			pr_err("avionics-hi3717a: Failed to read from fifo\n");
-			return status;
-		}
-
-		data[count] = be32_to_cpu(data[count]);
-		count++;
 	}
 
 	return count;
@@ -956,7 +979,7 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 	int i, err;
 
 	hi3717a->period_usec = 1000000/64; /* default rate is 64 words/sec */
-	hi3717a->wq = alloc_workqueue("hi3717a", WQ_FREEZABLE | WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
+	hi3717a->wq = alloc_workqueue("hi3717a", WQ_HIGHPRI, 0);
 	if (!hi3717a->wq) {
 		pr_err("avionics-hi3717a: Failed to allocate work-queue\n");
 		return -ENOMEM;
