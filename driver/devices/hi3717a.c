@@ -77,6 +77,7 @@ struct hi3717a {
 	int irq;
 	struct mutex lock;
 	atomic_t tx_enabled;
+	atomic_t rx_enabled;
 	int period_usec;
 };
 
@@ -91,6 +92,7 @@ struct hi3717a_priv {
 	__u16 *tx_buffer;
 	int tx_buffer_size;
 	atomic_t *tx_enabled;
+	atomic_t *rx_enabled;
 	int *period_usec;
 };
 
@@ -587,6 +589,47 @@ static int hi3717a_tx_stop(struct net_device *dev)
 	return 0;
 }
 
+static int hi3717a_rx_open(struct net_device *dev)
+{
+	struct hi3717a_priv *priv;
+
+	priv = avionics_device_priv(dev);
+	if (!priv) {
+		pr_err("avionics-hi3717a: Failed to get private data\n");
+		return -EINVAL;
+	}
+
+	if (atomic_read(priv->rx_enabled)) {
+		pr_err("avionics-hi3717a: Receiver already running\n");
+		return 0;
+	}
+
+	atomic_set(priv->rx_enabled, 1);
+	enable_irq(priv->irq);
+
+	return 0;
+}
+
+static int hi3717a_rx_stop(struct net_device *dev)
+{
+	struct hi3717a_priv *priv;
+
+	pr_warn("avionics-hi3717a: Disabling Receiver\n");
+
+	netif_stop_queue(dev);
+
+	priv = avionics_device_priv(dev);
+	if (!priv) {
+		pr_err("avionics-hi3717a: Failed to get private data\n");
+		return -EINVAL;
+	}
+
+	atomic_set(priv->rx_enabled, 0);
+	disable_irq(priv->irq);
+
+	return 0;
+}
+
 static int hi3717a_rxfifo_is_empty(struct hi3717a_priv *priv)
 {
 	int status;
@@ -743,7 +786,7 @@ static int hi3717a_rx_send_upstream(struct hi3717a_priv *priv, __u32 *data,
 
 static void hi3717a_rx_worker(struct work_struct *work)
 {
-	const int words_per = 16;
+	const int words_per = 12;
 	struct hi3717a_priv *priv;
 	struct net_device *dev;
 	__u32 data[HI3717A_FIFO_DEPTH*3];
@@ -884,6 +927,8 @@ static const struct net_device_ops hi3717a_tx_netdev_ops = {
 
 static const struct net_device_ops hi3717a_rx_netdev_ops = {
 	.ndo_change_mtu = hi3717a_change_mtu,
+	.ndo_open = hi3717a_rx_open,
+	.ndo_stop = hi3717a_rx_stop,
 };
 
 static const struct of_device_id hi3717a_of_device_id[] = {
@@ -1056,6 +1101,7 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 		priv->reset_gpio = hi3717a->reset_gpio;
 		priv->tx_enabled = &hi3717a->tx_enabled;
 		priv->tx_buffer = NULL;
+		priv->rx_enabled = &hi3717a->rx_enabled;
 		priv->wq = hi3717a->wq;
 		priv->period_usec = &hi3717a->period_usec;
 
@@ -1070,6 +1116,7 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 			return -EINVAL;
 		}
 		priv->irq = hi3717a->irq;
+		disable_irq_nosync(priv->irq);
 
 		err = hi3717a_set_arinc717rx(&avionics_arinc717rx_default,
 					    hi3717a->rx[i]);
@@ -1100,6 +1147,7 @@ static int hi3717a_remove(struct spi_device *spi)
 	pr_info("avionics-hi3717a: Removing Device\n");
 
 	atomic_set(&hi3717a->tx_enabled, 0);
+	atomic_set(&hi3717a->rx_enabled, 0);
 
 	if (hi3717a->wq) {
 		destroy_workqueue(hi3717a->wq);
@@ -1153,6 +1201,7 @@ static int hi3717a_probe(struct spi_device *spi)
 	spi_set_drvdata(spi, hi3717a);
 	mutex_init(&hi3717a->lock);
 	atomic_set(&hi3717a->tx_enabled, 0);
+	atomic_set(&hi3717a->rx_enabled, 0);
 
 	err = hi3717a_get_config(spi);
 	if (err) {
