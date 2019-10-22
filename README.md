@@ -3,6 +3,8 @@ Socket based Avionics Networking Driver for Linux
 
 Includes ARINC-429 interfaces, but can be expanded to include new protocols like ARINC-717, MIL-1553, etc.
 
+__NOTE: The linux kernel bust be configured for 1000 ticks per second (CONFIG_HZ_1000) for the higher ARINC-717 Rates to work__
+
 ## Notes on Kernel Header Files
 
 In order to create a socket device with a configurable interface we need to add a socket
