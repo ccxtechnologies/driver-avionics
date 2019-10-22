@@ -119,11 +119,6 @@ static int hi3717a_set_cntrl(struct hi3717a_priv *priv, __u8 value, __u8 mask,
 		return -ENODEV;
 	}
 
-	if ((status&mask) == (value&mask)) {
-		mutex_unlock(priv->lock);
-		return 0;
-	}
-
 	wr_cmd[0] = wr_opcode;
 
 	wr_cmd[1] = (status&(~mask)) | (value&mask);
@@ -260,7 +255,7 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 	}
 	pr_info("avionics-hi3717a: Reloaded CNTRL1 with 0x%zx\n", ctrl1);
 
-	err = hi3717a_set_cntrl(priv, (ctrl0&(~0x78)) | (value&0x78) , 0xff,
+	err = hi3717a_set_cntrl(priv, (ctrl0&(~0x78)) | (value&0x78) , 0x7f,
 			  HI3717A_OPCODE_WR_CTRL0, HI3717A_OPCODE_RD_CTRL0);
 	if (err < 0) {
 		pr_err("avionics-hi3717a: Failed to set CTRL0\n");
@@ -996,8 +991,6 @@ static int hi3717a_reset(struct spi_device *spi)
 {
 	struct hi3717a *hi3717a = spi_get_drvdata(spi);
 	ssize_t status;
-	int err;
-	__u8 wr_cmd[2];
 
 	gpio_set_value(hi3717a->reset_gpio, 0);
 	usleep_range(10, 100);
@@ -1008,15 +1001,6 @@ static int hi3717a_reset(struct spi_device *spi)
 		pr_err("avionics-hi3717a: TX FIFO is not cleared: %zx\n",
 		       status);
 		return -ENODEV;
-	}
-
-	wr_cmd[0] = HI3717A_OPCODE_WR_FSPIN;
-	wr_cmd[1] = 0x00; /* drive IRQ high when RX FIFO has data */
-	err = spi_write(spi, wr_cmd, sizeof(wr_cmd));
-	if (err < 0) {
-		pr_err("avionics-hi3717a: Failed to set RX IRQ Control: %d\n",
-		       err);
-		return err;
 	}
 
 	pr_info("avionics-hi3717a: Device up\n");
