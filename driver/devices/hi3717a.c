@@ -289,7 +289,7 @@ static void hi3717a_get_rate(struct avionics_rate *rate,
 	} else if((status&0x0070) == 0) {
 		rate->rate_hz = 768;
 	} else if((status&0x0070) == (1<<4)) {
-		rate->rate_hz = 1535;
+		rate->rate_hz = 1536;
 	} else if((status&0x0070) == (2<<4)) {
 		rate->rate_hz = 3072;
 	} else if((status&0x0070) == (3<<4)) {
