@@ -94,6 +94,7 @@ struct hi3717a_priv {
 	atomic_t *tx_enabled;
 	atomic_t *rx_enabled;
 	int *period_usec;
+	struct spi_transfer opcodes[HI3717A_FIFO_DEPTH];
 };
 
 static ssize_t hi3717a_get_cntrl(struct hi3717a_priv *priv, __u8 opcode)
@@ -651,14 +652,15 @@ static int hi3717a_rxfifo_is_empty(struct hi3717a_priv *priv)
 		stats->rx_fifo_errors++;
 	}
 
+	if (status & HI3717A_RXFIFO_EMPTY) {
+		return HI3717A_RXFIFO_EMPTY;
+	}
+
 	if (status & HI3717A_RXFIFO_OVF) {
 		pr_err("avionics-hi3717a: RX FIFO Overflow\n");
 		stats->rx_errors++;
 		stats->rx_fifo_errors++;
-	}
-
-	if (status & HI3717A_RXFIFO_EMPTY) {
-		return 1;
+		return HI3717A_RXFIFO_OVF;
 	}
 
 	return 0;
@@ -670,7 +672,7 @@ static int hi3717a_rxfifo_read(struct hi3717a_priv *priv,
 {
 	int i, status;
 	struct spi_message message;
-	struct spi_transfer opcodes[HI3717A_FIFO_DEPTH];
+	struct spi_transfer *opcodes = priv->opcodes;
 	__u8 rd_cmd[5], buffer[HI3717A_FIFO_DEPTH*5];
 	__u32 vbuffer;
 
@@ -792,6 +794,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	__u32 data[HI3717A_FIFO_DEPTH*3];
 	ssize_t status;
 	int count, delay;
+	bool fifo_error = false;
 
 	priv = container_of(work, struct hi3717a_priv, worker);
 	dev = priv->dev;
@@ -810,8 +813,10 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	if (unlikely(status < 0)) {
 		pr_err("avionics-hi3717a: Failed to read status\n");
 		goto done;
-	} else if (status > 0) {
+	} else if (status == HI3717A_RXFIFO_EMPTY) {
 		goto done;
+	} else if (status == HI3717A_RXFIFO_OVF) {
+		fifo_error = 1;
 	}
 
 	status = hi3717a_rxfifo_read(priv, data, words_per);
@@ -833,10 +838,12 @@ static void hi3717a_rx_worker(struct work_struct *work)
 
 	count += status;
 
-	status = hi3717a_rx_send_upstream(priv, data, count);
-	if (unlikely(status < 0)) {
-		pr_err("avionics-hi3717a: Failed to send packet\n");
-		goto done;
+	if (!fifo_error) {
+		status = hi3717a_rx_send_upstream(priv, data, count);
+		if (unlikely(status < 0)) {
+			pr_err("avionics-hi3717a: Failed to send packet\n");
+			goto done;
+		}
 	}
 
 done:
