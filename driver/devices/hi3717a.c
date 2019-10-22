@@ -524,7 +524,7 @@ static void hi3717a_tx_worker(struct work_struct *work)
 			}
 		}
 
-		usleep_range(delay, delay+1200);
+		usleep_range(delay, delay+100);
 	}
 
 done:
@@ -803,7 +803,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 		goto done;
 	}
 
-	usleep_range(delay, delay+1200);
+	usleep_range(delay, delay+100);
 
 	mutex_lock(priv->lock);
 	status = hi3717a_rxfifo_is_empty(priv);
