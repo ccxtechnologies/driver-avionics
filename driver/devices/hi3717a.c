@@ -86,7 +86,7 @@ struct hi3717a_priv {
 	struct spi_device *spi;
 	struct mutex *lock;
 	struct workqueue_struct *wq;
-	struct work_struct worker;
+	struct delayed_work worker;
 	int irq;
 	int reset_gpio;
 	__u16 *tx_buffer;
@@ -455,7 +455,8 @@ static void hi3717a_tx_worker(struct work_struct *work)
 	int err, i, delay, frame_size;
 	__u16 *tx_buffer, buffer;
 
-	priv = container_of(work, struct hi3717a_priv, worker);
+	priv = container_of((struct delayed_work*)work,
+			    struct hi3717a_priv, worker);
 	dev = priv->dev;
 	stats = &dev->stats;
 
@@ -564,7 +565,7 @@ static int hi3717a_tx_open(struct net_device *dev)
 	pr_warn("avionics-hi3717a: Enabling Driver\n");
 	netif_wake_queue(dev);
 
-	queue_work(priv->wq, &priv->worker);
+	queue_delayed_work(priv->wq, &priv->worker, 0);
 
 	return 0;
 }
@@ -786,27 +787,26 @@ static int hi3717a_rx_send_upstream(struct hi3717a_priv *priv, __u32 *data,
 	return 0;
 }
 
+#define HI3717A_RX_WORDS_PER 16
+
 static void hi3717a_rx_worker(struct work_struct *work)
 {
-	const int words_per = 12;
 	struct hi3717a_priv *priv;
 	struct net_device *dev;
 	__u32 data[HI3717A_FIFO_DEPTH*3];
 	ssize_t status;
-	int count, delay;
+	int count;
 	bool fifo_error = false;
 
-	priv = container_of(work, struct hi3717a_priv, worker);
+	priv = container_of((struct delayed_work*)work,
+			    struct hi3717a_priv, worker);
 	dev = priv->dev;
-	delay = (*priv->period_usec)*words_per;
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
 		pr_err("avionics-hi3717a: Failed to get private data\n");
 		goto done;
 	}
-
-	usleep_range(delay, delay+100);
 
 	mutex_lock(priv->lock);
 	status = hi3717a_rxfifo_is_empty(priv);
@@ -819,7 +819,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 		fifo_error = 1;
 	}
 
-	status = hi3717a_rxfifo_read(priv, data, words_per);
+	status = hi3717a_rxfifo_read(priv, data, HI3717A_RX_WORDS_PER);
 	if (unlikely(status < 0)) {
 		pr_err("avionics-hi3717a: Failed to read fifo block\n");
 		goto done;
@@ -830,8 +830,6 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	status = hi3717a_rxfifo_read_all(priv, &data[count]);
 	if (unlikely(status < 0)) {
 		pr_err("avionics-hi3717a: Failed to empty fifo\n");
-		goto done;
-	} else if (status == 0) {
 		goto done;
 	}
 	mutex_unlock(priv->lock);
@@ -854,6 +852,7 @@ done:
 static irqreturn_t hi3717a_rx_irq(int irq, void *data)
 {
 	struct hi3717a_priv *priv = data;
+	int delay;
 
 	if (unlikely(irq != priv->irq)) {
 		pr_err("avionics-hi3717a: Unexpected irq %d\n", irq);
@@ -861,7 +860,15 @@ static irqreturn_t hi3717a_rx_irq(int irq, void *data)
 	}
 
 	disable_irq_nosync(priv->irq);
-	queue_work(priv->wq, &priv->worker);
+
+
+	if (atomic_read(priv->rx_enabled)) {
+		delay = (*priv->period_usec)*(HI3717A_RX_WORDS_PER) +
+			(*priv->period_usec);
+		queue_delayed_work(priv->wq, &priv->worker,
+				   (delay*HZ)/1000000);
+	}
+
 	return IRQ_HANDLED;
 }
 
@@ -1065,7 +1072,7 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 		priv->wq = hi3717a->wq;
 		priv->period_usec = &hi3717a->period_usec;
 
-		INIT_WORK(&priv->worker, hi3717a_tx_worker);
+		INIT_DELAYED_WORK(&priv->worker, hi3717a_tx_worker);
 
 		err = hi3717a_set_arinc717tx(&avionics_arinc717tx_default,
 					    hi3717a->tx[i]);
@@ -1112,7 +1119,7 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 		priv->wq = hi3717a->wq;
 		priv->period_usec = &hi3717a->period_usec;
 
-		INIT_WORK(&priv->worker, hi3717a_rx_worker);
+		INIT_DELAYED_WORK(&priv->worker, hi3717a_rx_worker);
 
 		err = request_irq(hi3717a->irq, hi3717a_rx_irq,
 				  IRQF_TRIGGER_LOW,
@@ -1156,9 +1163,6 @@ static int hi3717a_remove(struct spi_device *spi)
 	atomic_set(&hi3717a->tx_enabled, 0);
 	atomic_set(&hi3717a->rx_enabled, 0);
 
-	if (hi3717a->wq) {
-		destroy_workqueue(hi3717a->wq);
-	}
 
 	for (i = 0; i < HI3717A_NUM_TX; i++) {
 		if (hi3717a->tx[i]) {
@@ -1176,6 +1180,7 @@ static int hi3717a_remove(struct spi_device *spi)
 				if (priv->irq) {
 					free_irq(priv->irq, priv);
 				}
+				cancel_delayed_work_sync(&priv->worker);
 			}
 			avionics_device_unregister(hi3717a->rx[i]);
 			avionics_device_free(hi3717a->rx[i]);
@@ -1187,6 +1192,12 @@ static int hi3717a_remove(struct spi_device *spi)
 		gpio_set_value(hi3717a->reset_gpio, 1);
 		gpio_free(hi3717a->reset_gpio);
 		hi3717a->reset_gpio = 0;
+	}
+
+	if (hi3717a->wq) {
+		flush_scheduled_work();
+		flush_workqueue(hi3717a->wq);
+		destroy_workqueue(hi3717a->wq);
 	}
 
 	return 0;
