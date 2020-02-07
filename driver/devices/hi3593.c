@@ -431,7 +431,7 @@ static int hi3593_tx_open(struct net_device *dev)
 
 	err = hi3593_set_cntrl(priv, 0, AVIONICS_ARINC429TX_HIZ);
 	if (err < 0) {
-		pr_err("avionics-hi3593: Failed to disable driver\n");
+		pr_err("avionics-hi3593: Failed to enable driver\n");
 		return err;
 	}
 
@@ -885,7 +885,7 @@ static int hi3593_get_config(struct spi_device *spi)
 static int hi3593_reset(struct spi_device *spi)
 {
 	struct hi3593 *hi3593 = spi_get_drvdata(spi);
-	__u8 opcode;
+	__u8 opcode, wr_cmd[2];
 	ssize_t status;
 	int err;
 
@@ -904,6 +904,16 @@ static int hi3593_reset(struct spi_device *spi)
 	} else {
 		usleep_range(100, 150);
 		gpio_set_value(hi3593->reset_gpio, 0);
+	}
+
+	/* Default to high-impdance driver */
+	wr_cmd[0] = HI3593_OPCODE_WR_TX_CNTRL;
+	wr_cmd[1] = AVIONICS_ARINC429TX_HIZ;
+
+	err = spi_write(spi, wr_cmd, sizeof(wr_cmd));
+	if (err < 0) {
+		pr_err("avionics-hi3593: Failed to disable driver\n");
+		return err;
 	}
 
 	status = spi_w8r8(spi, HI3593_OPCODE_RD_TX_STATUS);
