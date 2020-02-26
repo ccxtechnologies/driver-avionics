@@ -124,14 +124,14 @@ def set_rate(rate):
             msg, msghdr = nlmsghdr.consume(msg)
 
             if msghdr.nlmsg_len != msg_len:
-                print(f"Message truncated! {msghdr.nlmsg_len} != {len(msg)}")
+                print("Message truncated! {msghdr.nlmsg_len} != {len(msg)}")
                 return
 
             if msghdr.nlmsg_type == NLMSG_ERROR:
                 msg, msgerr = nlmsgerr.consume(msg)
                 msg, msgerrhdr = nlmsghdr.consume(msg)
                 if msgerr.error:
-                    print(f"Error: {msgerr} from {msgerrhdr}")
+                    print("Error: {msgerr} from {msgerrhdr}")
                 return
 
 
@@ -139,4 +139,4 @@ if __name__ == "__main__":
 
     rate = int(sys.argv[2])
     set_rate(rate)
-    print(f"Rate set to {rate}")
+    print("Rate set to {rate}")

@@ -46,18 +46,18 @@ def print_a717(value):
     frame = (value&0x3)
 
     if (count != last_count + 1) and (frame != (last_frame + 1)%4):
-        print(f"==> 0x{last_word:03X} -- {last_count} -- {last_frame}")
-        print(f"--> 0x{word:03X} -- {count} -- {frame}")
+        print("==> 0x{last_word:03X} -- {last_count} -- {last_frame}")
+        print("--> 0x{word:03X} -- {count} -- {frame}")
 
     last_word = word
     last_count = count
     last_frame = frame
 
     if word:
-        print(f"~~> 0x{word:03X} -- {count} -- {frame}")
+        print("~~> 0x{word:03X} -- {count} -- {frame}")
 
 def print_a429(value):
-    print(f"0x{value:08X}")
+    print("0x{value:08X}")
 
 # == create socket ==
 with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:

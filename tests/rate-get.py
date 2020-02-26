@@ -83,7 +83,7 @@ def parse_rtattr(msg):
         msg, msgrattr = rattr.consume(msg)
 
         if msgrattr.rta_len < 4:
-            print(f"Invalid rta length {msgrattr.rta_len}")
+            print("Invalid rta length {msgrattr.rta_len}")
             break
 
         increment = ((msgrattr.rta_len + 4 - 1) & ~(4 - 1)) - len(rattr)
@@ -119,17 +119,17 @@ def getlink():
             msg, msghdr = nlmsghdr.consume(msg)
 
             if msghdr.nlmsg_len != msg_len:
-                print(f"Message truncated! {msghdr.nlmsg_len} != {len(msg)}")
+                print("Message truncated! {msghdr.nlmsg_len} != {len(msg)}")
                 return
 
             if msghdr.nlmsg_type != RTM_NEWLINK:
-                print(f"Unexpected message type {msghdr.nlmsg_type}")
+                print("Unexpected message type {msghdr.nlmsg_type}")
                 return
 
             msg, msgifinfo = ifinfomsg.consume(msg)
 
             if msgifinfo.ifi_index != index:
-                print(f"Wrong device index: {msgifinfo.ifi_index}")
+                print("Wrong device index: {msgifinfo.ifi_index}")
                 return
 
             return msg

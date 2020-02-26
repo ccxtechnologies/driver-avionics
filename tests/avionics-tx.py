@@ -76,8 +76,8 @@ with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
     sent = sock.send(a429_data)
 
     if sent < 0:
-        print(f"Send failed {error_code_to_str(-sent)}")
+        print("Send failed {error_code_to_str(-sent)}")
         if sent == -1:
             print("Is interface up?")
     else:
-        print(f"Sent {sent} bytes.")
+        print("Sent {sent} bytes.")

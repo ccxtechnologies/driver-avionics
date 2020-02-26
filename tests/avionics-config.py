@@ -149,14 +149,14 @@ def set_avionics_config(device, set_packet):
             msg, msghdr = nlmsghdr.consume(msg)
 
             if msghdr.nlmsg_len != msg_len:
-                print(f"Message truncated! {msghdr.nlmsg_len} != {len(msg)}")
+                print("Message truncated! {msghdr.nlmsg_len} != {len(msg)}")
                 return
 
             if msghdr.nlmsg_type == NLMSG_ERROR:
                 msg, msgerr = nlmsgerr.consume(msg)
                 msg, msgerrhdr = nlmsghdr.consume(msg)
                 if msgerr.error:
-                    print(f"Error: {msgerr} from {msgerrhdr}")
+                    print("Error: {msgerr} from {msgerrhdr}")
                 return
 
 
@@ -212,7 +212,7 @@ def parse_rtattr(msg):
         msg, msgrattr = rattr.consume(msg)
 
         if msgrattr.rta_len < 4:
-            print(f"Invalid rta length {msgrattr.rta_len}")
+            print("Invalid rta length {msgrattr.rta_len}")
             break
 
         increment = ((msgrattr.rta_len + 4 - 1) & ~(4 - 1)) - len(rattr)
@@ -248,17 +248,17 @@ def getlink(device):
             msg, msghdr = nlmsghdr.consume(msg)
 
             if msghdr.nlmsg_len != msg_len:
-                print(f"Message truncated! {msghdr.nlmsg_len} != {len(msg)}")
+                print("Message truncated! {msghdr.nlmsg_len} != {len(msg)}")
                 return
 
             if msghdr.nlmsg_type != RTM_NEWLINK:
-                print(f"Unexpected message type {msghdr.nlmsg_type}")
+                print("Unexpected message type {msghdr.nlmsg_type}")
                 return
 
             msg, msgifinfo = ifinfomsg.consume(msg)
 
             if msgifinfo.ifi_index != index:
-                print(f"Wrong device index: {msgifinfo.ifi_index}")
+                print("Wrong device index: {msgifinfo.ifi_index}")
                 return
 
             return msg
@@ -272,20 +272,20 @@ def get_arinc429tx(device):
     link_data = parse_rtattr(link_info[IFLA_INFO_DATA])
 
     rate = avionics_rate.unpack(link_data[IFLA_AVIONICS_RATE])
-    print(f"Rate = {rate.rate_hz} Hz")
+    print("Rate = {rate.rate_hz} Hz")
 
     config = avionics_arinc429tx.unpack(link_data[IFLA_AVIONICS_ARINC429TX])
     print(config)
     print(
-            f"Flip Label Bits ="
-            f" {bool(config.flags&AVIONICS_ARINC429TX_FLIP_LABEL_BITS)}"
+            "Flip Label Bits ="
+            " {bool(config.flags&AVIONICS_ARINC429TX_FLIP_LABEL_BITS)}"
     )
-    print(f"Self Test = {bool(config.flags&AVIONICS_ARINC429TX_SELF_TEST)}")
+    print("Self Test = {bool(config.flags&AVIONICS_ARINC429TX_SELF_TEST)}")
     print(
-            f"Even Parity ="
-            f" {bool(config.flags&AVIONICS_ARINC429TX_EVEN_PARITY)}"
+            "Even Parity ="
+            " {bool(config.flags&AVIONICS_ARINC429TX_EVEN_PARITY)}"
     )
-    print(f"Set Parity = {bool(config.flags&AVIONICS_ARINC429TX_PARITY_SET)}")
+    print("Set Parity = {bool(config.flags&AVIONICS_ARINC429TX_PARITY_SET)}")
 
 
 def get_arinc429rx(device):
@@ -296,37 +296,37 @@ def get_arinc429rx(device):
     link_data = parse_rtattr(link_info[IFLA_INFO_DATA])
 
     rate = avionics_rate.unpack(link_data[IFLA_AVIONICS_RATE])
-    print(f"Rate = {rate.rate_hz} Hz")
+    print("Rate = {rate.rate_hz} Hz")
 
     config = avionics_arinc429rx.unpack(link_data[IFLA_AVIONICS_ARINC429RX])
     print(
             "Flip Label Bits = "
-            f"{bool(config.flags&AVIONICS_ARINC429RX_FLIP_LABEL_BITS)}"
+            "{bool(config.flags&AVIONICS_ARINC429RX_FLIP_LABEL_BITS)}"
     )
-    print(f"SD9 Mask = {bool(config.flags&AVIONICS_ARINC429RX_SD9_MASK)}")
-    print(f"SD10 Mask = {bool(config.flags&AVIONICS_ARINC429RX_SD10_MASK)}")
+    print("SD9 Mask = {bool(config.flags&AVIONICS_ARINC429RX_SD9_MASK)}")
+    print("SD10 Mask = {bool(config.flags&AVIONICS_ARINC429RX_SD10_MASK)}")
     print(
             "SD Mask Enable = "
-            f"{bool(config.flags&AVIONICS_ARINC429RX_SD_MASK_ENABLE)}"
+            "{bool(config.flags&AVIONICS_ARINC429RX_SD_MASK_ENABLE)}"
     )
     print(
             "Parity Check Enabled = "
-            f"{bool(config.flags&AVIONICS_ARINC429RX_PARITY_CHECK)}"
+            "{bool(config.flags&AVIONICS_ARINC429RX_PARITY_CHECK)}"
     )
     print(
             "Even Parity = "
-            f"{bool(config.flags&AVIONICS_ARINC429RX_EVEN_PARITY)}"
+            "{bool(config.flags&AVIONICS_ARINC429RX_EVEN_PARITY)}"
     )
     print(
             "Label Filter Enabled = "
-            f"{bool(config.flags&AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE)}"
+            "{bool(config.flags&AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE)}"
     )
     print(
             "Priority Labels Enabled = "
-            f"{bool(config.flags&AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE)}"
+            "{bool(config.flags&AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE)}"
     )
-    print(f"Priority Labels = {config.priority_labels}")
-    print(f"Label Filters = {config.label_filters}")
+    print("Priority Labels = {config.priority_labels}")
+    print("Label Filters = {config.label_filters}")
 
 
 def get_arinc717tx(device):
@@ -337,12 +337,12 @@ def get_arinc717tx(device):
     link_data = parse_rtattr(link_info[IFLA_INFO_DATA])
 
     rate = avionics_rate.unpack(link_data[IFLA_AVIONICS_RATE])
-    print(f"Rate = {rate.rate_hz} Hz")
+    print("Rate = {rate.rate_hz} Hz")
 
     config = avionics_arinc717tx.unpack(link_data[IFLA_AVIONICS_ARINC717TX])
     print(config)
-    print(f"Slew Rate =" f" {int((config.flags&AVIONICS_ARINC717TX_SLEW)>>1)}")
-    print(f"Self Test = {bool(config.flags&AVIONICS_ARINC717TX_SELF_TEST)}")
+    print("Slew Rate =" " {int((config.flags&AVIONICS_ARINC717TX_SLEW)>>1)}")
+    print("Self Test = {bool(config.flags&AVIONICS_ARINC717TX_SELF_TEST)}")
 
 
 def get_arinc717rx(device):
@@ -353,13 +353,13 @@ def get_arinc717rx(device):
     link_data = parse_rtattr(link_info[IFLA_INFO_DATA])
 
     rate = avionics_rate.unpack(link_data[IFLA_AVIONICS_RATE])
-    print(f"Rate = {rate.rate_hz} Hz")
+    print("Rate = {rate.rate_hz} Hz")
 
     config = avionics_arinc717tx.unpack(link_data[IFLA_AVIONICS_ARINC717RX])
     print(config)
-    print(f"BPRZ = {bool(config.flags&AVIONICS_ARINC717RX_BPRZ)}")
-    print(f"No Sync = {bool(config.flags&AVIONICS_ARINC717RX_NOSYNC)}")
-    print(f"Soft Sync = {bool(config.flags&AVIONICS_ARINC717RX_SFTSYNC)}")
+    print("BPRZ = {bool(config.flags&AVIONICS_ARINC717RX_BPRZ)}")
+    print("No Sync = {bool(config.flags&AVIONICS_ARINC717RX_NOSYNC)}")
+    print("Soft Sync = {bool(config.flags&AVIONICS_ARINC717RX_SFTSYNC)}")
 
 
 # =============================================================================
