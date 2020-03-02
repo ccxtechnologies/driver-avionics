@@ -7,11 +7,13 @@ __NOTE: The linux kernel must be configured for 1000 ticks per second (CONFIG_HZ
 
 ## Notes on Kernel Header Files
 
-In order to create a socket device with a configurable interface we need to add a socket
-AF\_index and PF\_index to socket.h, an ARPHRD\_index to if\_arp.h, and an ETH\_P\_index to if\_ether.h.
+In order to create a socket device with a configurable interface we would technically have to add a socket
+AF\_index and PF\_index to socket.h, an ARPHRD\_index to if\_arp.h, and an ETH\_P\_index to if\_ether.h but
+since we want to build this as an out-of-tree dirver we can't do that. So we stole the unused indexes from Ash.
+Refer to arinc429.h for more details on this ugly hack.
 
-Since we would prefer this to be an out-of-tree driver (at least for now) we reuse existing but
-unused indexes for Ash. Refer to arinc429.h for more details on this ugly hack.
+If this driver ever get's upstreamed, or if you want to create a patch for it and pull it into your kernel you should
+create new, unique socket indexes.
 
 # Kernel Version
 
