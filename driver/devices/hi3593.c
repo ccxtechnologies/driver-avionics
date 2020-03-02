@@ -950,7 +950,7 @@ static int hi3593_set_aclk(struct spi_device *spi)
 	if (hi3593->aclk == 1000000) {
 		cmd[1] = 0x00;
 	} else {
-		cmd[1] = hi3593->aclk/2000000;
+		cmd[1] = hi3593->aclk/1000000;
 	}
 
 	err = spi_write(spi, &cmd, sizeof(cmd));
