@@ -130,7 +130,6 @@ static int device_fill_info(struct sk_buff *skb, const struct net_device *dev)
 
 		err = nla_put(skb, IFLA_AVIONICS_RATE, sizeof(rate), &rate);
 		if (err) {
-			pr_warn("avionics-device: Couldn't set rate in nla\n");
 			return -EMSGSIZE;
 		}
 	}
@@ -142,8 +141,6 @@ static int device_fill_info(struct sk_buff *skb, const struct net_device *dev)
 		err = nla_put(skb, IFLA_AVIONICS_ARINC429RX,
 			      sizeof(arinc429rx), &arinc429rx);
 		if (err) {
-			pr_warn("avionics-device: Failed to set"
-				" ARINC-429 RX in nla\n");
 			return -EMSGSIZE;
 		}
 	}
@@ -155,8 +152,6 @@ static int device_fill_info(struct sk_buff *skb, const struct net_device *dev)
 		err = nla_put(skb, IFLA_AVIONICS_ARINC429TX,
 			      sizeof(arinc429tx), &arinc429tx);
 		if (err) {
-			pr_warn("avionics-device: Failed to set"
-				" ARINC-429 TX in nla\n");
 			return -EMSGSIZE;
 		}
 
@@ -169,8 +164,6 @@ static int device_fill_info(struct sk_buff *skb, const struct net_device *dev)
 		err = nla_put(skb, IFLA_AVIONICS_ARINC717RX,
 			      sizeof(arinc717rx), &arinc717rx);
 		if (err) {
-			pr_warn("avionics-device: Failed to set"
-				" ARINC-717 RX in nla\n");
 			return -EMSGSIZE;
 		}
 	}
@@ -182,8 +175,6 @@ static int device_fill_info(struct sk_buff *skb, const struct net_device *dev)
 		err = nla_put(skb, IFLA_AVIONICS_ARINC717TX,
 			      sizeof(arinc717tx), &arinc717tx);
 		if (err) {
-			pr_warn("avionics-device: Failed to set"
-				" ARINC-717 TX in nla\n");
 			return -EMSGSIZE;
 		}
 
