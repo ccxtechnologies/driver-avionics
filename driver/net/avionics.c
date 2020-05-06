@@ -141,7 +141,7 @@ static int avionics_packet_rx(struct sk_buff *skb, struct net_device *dev,
 	}
 
 	if(unlikely(dev->type != ARPHRD_AVIONICS)) {
-		pr_warning("avionics: dropped invalid skbuf,"
+		pr_warn("avionics: dropped invalid skbuf,"
 			   " dev type %d, len %d\n", dev->type, skb->len);
 		kfree_skb(skb);
 		return NET_RX_DROP;
