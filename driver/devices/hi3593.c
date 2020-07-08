@@ -93,6 +93,7 @@ MODULE_VERSION("1.2.0");
 struct hi3593 {
 	struct net_device *rx[HI3593_NUM_RX];
 	struct net_device *tx[HI3593_NUM_TX];
+	struct workqueue_struct *wq;
 	int reset_gpio;
 	int irq[2];
 	__u32 aclk;
@@ -108,7 +109,7 @@ struct hi3593_priv {
 	int rx_index;
 	struct mutex *lock;
 	struct workqueue_struct *wq;
-	struct work_struct worker;
+	struct delayed_work worker;
 	int irq;
 	__u8 even_parity;
 	__u8 check_parity;
@@ -459,7 +460,6 @@ static int hi3593_tx_stop(struct net_device *dev)
 	}
 
 	skb_queue_purge(&priv->skbq);
-	flush_workqueue(priv->wq);
 
 	err = hi3593_set_cntrl(priv, AVIONICS_ARINC429TX_HIZ,
 			       AVIONICS_ARINC429TX_HIZ);
@@ -525,7 +525,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 	ssize_t status;
 	int err, i, cnt;
 
-	priv = container_of(work, struct hi3593_priv, worker);
+	priv = container_of((struct delayed_work*)work,
+			    struct hi3593_priv, worker);
 	dev = priv->dev;
 	stats = &dev->stats;
 
@@ -727,7 +728,7 @@ static irqreturn_t hi3593_rx_irq(int irq, void *data)
 	disable_irq_nosync(priv->irq);
 
 	if (atomic_read(priv->rx_enabled)) {
-		queue_work(priv->wq, &priv->worker);
+		queue_delayed_work(priv->wq, &priv->worker, 0);
 	}
 
 	return IRQ_HANDLED;
@@ -743,7 +744,8 @@ static void hi3593_tx_worker(struct work_struct *work)
 	ssize_t status;
 	int err, i;
 
-	priv = container_of(work, struct hi3593_priv, worker);
+	priv = container_of((struct delayed_work*)work,
+			    struct hi3593_priv, worker);
 	dev = priv->dev;
 	stats = &dev->stats;
 
@@ -859,7 +861,7 @@ static netdev_tx_t hi3593_tx_start_xmit(struct sk_buff *skb,
 	}
 
 	skb_queue_tail(&priv->skbq, skb);
-	queue_work(priv->wq, &priv->worker);
+	queue_delayed_work(priv->wq, &priv->worker, 0);
 
 	return NETDEV_TX_OK;
 }
@@ -1044,6 +1046,12 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 	struct hi3593_priv *priv;
 	int i, err;
 
+	hi3593->wq = alloc_workqueue("hi3593", WQ_HIGHPRI, 0);
+	if (!hi3593->wq) {
+		pr_err("avionics-hi3593: Failed to allocate work-queue\n");
+		return -ENOMEM;
+	}
+
 	for (i = 0; i < HI3593_NUM_TX; i++) {
 		hi3593->tx[i] = avionics_device_alloc(sizeof(*priv),
 						      &hi3593_arinc429tx_ops);
@@ -1068,15 +1076,9 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->tx_index = i;
 		priv->rx_index = -1;
 		skb_queue_head_init(&priv->skbq);
-		priv->wq = alloc_workqueue("%s", WQ_FREEZABLE | WQ_MEM_RECLAIM,
-					   0, hi3593->tx[i]->name);
-		if (!priv->wq) {
-			pr_err("avionics-hi3593: Failed to allocate"
-			       " tx work-queue %d\n", i);
-			return -ENOMEM;
-		}
+		priv->wq = hi3593->wq;
 
-		INIT_WORK(&priv->worker, hi3593_tx_worker);
+		INIT_DELAYED_WORK(&priv->worker, hi3593_tx_worker);
 
 		err = hi3593_set_arinc429tx(&avionics_arinc429tx_default,
 					    hi3593->tx[i]);
@@ -1120,15 +1122,9 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->rx_index = i;
 		priv->rx_enabled = &hi3593->rx_enabled[i];
 		skb_queue_head_init(&priv->skbq);
-		priv->wq = alloc_workqueue("%s", WQ_FREEZABLE | WQ_MEM_RECLAIM,
-					   0, hi3593->rx[i]->name);
-		if (!priv->wq) {
-			pr_err("avionics-hi3593: Failed to allocate"
-			       " rx work-queue %d\n", i);
-			return -ENOMEM;
-		}
+		priv->wq = hi3593->wq;
 
-		INIT_WORK(&priv->worker, hi3593_rx_worker);
+		INIT_DELAYED_WORK(&priv->worker, hi3593_rx_worker);
 
 		err = request_irq(hi3593->irq[i], hi3593_rx_irq,
 				  IRQF_TRIGGER_RISING | IRQF_ONESHOT,
@@ -1174,7 +1170,7 @@ static int hi3593_remove(struct spi_device *spi)
 			priv = avionics_device_priv(hi3593->tx[i]);
 			if (priv) {
 				skb_queue_purge(&priv->skbq);
-				destroy_workqueue(priv->wq);
+				cancel_delayed_work_sync(&priv->worker);
 			}
 			avionics_device_unregister(hi3593->tx[i]);
 			avionics_device_free(hi3593->tx[i]);
@@ -1188,10 +1184,10 @@ static int hi3593_remove(struct spi_device *spi)
 			priv = avionics_device_priv(hi3593->rx[i]);
 			if (priv) {
 				skb_queue_purge(&priv->skbq);
-				destroy_workqueue(priv->wq);
 				if (priv->irq) {
 					free_irq(priv->irq, priv);
 				}
+				cancel_delayed_work_sync(&priv->worker);
 			}
 			avionics_device_unregister(hi3593->rx[i]);
 			avionics_device_free(hi3593->rx[i]);
@@ -1203,6 +1199,12 @@ static int hi3593_remove(struct spi_device *spi)
 		gpio_set_value(hi3593->reset_gpio, 1);
 		gpio_free(hi3593->reset_gpio);
 		hi3593->reset_gpio = 0;
+	}
+
+	if (hi3593->wq) {
+		flush_scheduled_work();
+		flush_workqueue(hi3593->wq);
+		destroy_workqueue(hi3593->wq);
 	}
 
 	return 0;
