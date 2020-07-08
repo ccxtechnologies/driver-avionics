@@ -96,7 +96,6 @@ struct hi3593 {
 	int irq[2];
 	__u32 aclk;
 	struct mutex lock;
-	atomic_t rx_enabled;
 };
 
 struct hi3593_priv {
@@ -111,7 +110,6 @@ struct hi3593_priv {
 	int irq;
 	__u8 even_parity;
 	__u8 check_parity;
-	atomic_t *rx_enabled;
 };
 
 static ssize_t hi3593_get_cntrl(struct hi3593_priv *priv)
@@ -470,47 +468,6 @@ static int hi3593_tx_stop(struct net_device *dev)
 	return 0;
 }
 
-static int hi3593_rx_open(struct net_device *dev)
-{
-	struct hi3593_priv *priv;
-
-	priv = avionics_device_priv(dev);
-	if (!priv) {
-		pr_err("avionics-hi3593: Failed to get private data\n");
-		return -EINVAL;
-	}
-
-	if (atomic_read(priv->rx_enabled)) {
-		pr_err("avionics-hi3593: Receiver already running\n");
-		return 0;
-	}
-
-	atomic_set(priv->rx_enabled, 1);
-	enable_irq(priv->irq);
-
-	return 0;
-}
-
-static int hi3593_rx_stop(struct net_device *dev)
-{
-	struct hi3593_priv *priv;
-
-	pr_warn("avionics-hi3593: Disabling Receiver\n");
-
-	netif_stop_queue(dev);
-
-	priv = avionics_device_priv(dev);
-	if (!priv) {
-		pr_err("avionics-hi3593: Failed to get private data\n");
-		return -EINVAL;
-	}
-
-	atomic_set(priv->rx_enabled, 0);
-	disable_irq(priv->irq);
-
-	return 0;
-}
-
 static void hi3593_rx_worker(struct work_struct *work)
 {
 	struct net_device *dev;
@@ -558,7 +515,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 	status = spi_w8r8(priv->spi, status_cmd);
 	if (status < 0) {
 		pr_err("avionics-hi3593: Failed to read status\n");
-		goto done;
+		mutex_unlock(priv->lock);
+		return;
 	}
 
 	if (status & HI3593_FIFO_FULL) {
@@ -572,7 +530,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 		if (unlikely(err)) {
 			pr_err("avionics-hi3593: Failed to"
 			       " read priority labels\n");
-			goto done;
+			mutex_unlock(priv->lock);
+			return;
 		}
 	}
 
@@ -585,7 +544,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 			if (unlikely(err)) {
 				pr_err("avionics-hi3593: Failed to"
 				       " read priority label\n");
-				goto done;
+				mutex_unlock(priv->lock);
+				return;
 			}
 
 			if(!priv->check_parity ||
@@ -600,7 +560,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 				if (unlikely(!skb)) {
 					pr_err("avionics-lb: Failed to"
 					       " allocate RX buffer\n");
-					goto done;
+					mutex_unlock(priv->lock);
+					return;
 				}
 
 				#if defined(__LITTLE_ENDIAN)
@@ -644,7 +605,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 			if (unlikely(err)) {
 				pr_err("avionics-hi3593: Failed to"
 				       " read from fifo\n");
-				goto done;
+				mutex_unlock(priv->lock);
+				return;
 			}
 
 			if(!priv->check_parity ||
@@ -683,7 +645,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 			if (unlikely(status < 0)) {
 				pr_err("avionics-hi3593: Failed to"
 				       " read status\n");
-				goto done;
+				mutex_unlock(priv->lock);
+				return;
 			}
 
 			if(status & HI3593_FIFO_EMPTY) {
@@ -696,7 +659,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 			if (unlikely(!skb)) {
 				pr_err("avionics-lb: Failed to"
 				       " allocate RX buffer\n");
-				goto done;
+				mutex_unlock(priv->lock);
+				return;
 			}
 
 			skb_copy_to_linear_data(skb, data, cnt);
@@ -708,9 +672,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 		}
 	}
 
-done:
 	mutex_unlock(priv->lock);
-	enable_irq(priv->irq);
 
 }
 
@@ -718,16 +680,7 @@ static irqreturn_t hi3593_rx_irq(int irq, void *data)
 {
 	struct hi3593_priv *priv = data;
 
-	if (unlikely(irq != priv->irq)) {
-		pr_err("avionics-hi3593: Unexpected irq %d\n", irq);
-		return IRQ_HANDLED;
-	}
-
-	disable_irq_nosync(priv->irq);
-	if (atomic_read(priv->rx_enabled)) {
-		queue_work(priv->wq, &priv->worker);
-	}
-
+	queue_work(priv->wq, &priv->worker);
 	return IRQ_HANDLED;
 }
 
@@ -871,8 +824,6 @@ static const struct net_device_ops hi3593_tx_netdev_ops = {
 
 static const struct net_device_ops hi3593_rx_netdev_ops = {
 	.ndo_change_mtu = hi3593_change_mtu,
-	.ndo_open = hi3593_rx_open,
-	.ndo_stop = hi3593_rx_stop,
 };
 
 static const struct of_device_id hi3593_of_device_id[] = {
@@ -1116,7 +1067,6 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->lock = &hi3593->lock;
 		priv->tx_index = -1;
 		priv->rx_index = i;
-		priv->rx_enabled = &hi3593->rx_enabled;
 		skb_queue_head_init(&priv->skbq);
 		priv->wq = alloc_workqueue("%s", WQ_FREEZABLE | WQ_MEM_RECLAIM,
 					   0, hi3593->rx[i]->name);
@@ -1165,8 +1115,6 @@ static int hi3593_remove(struct spi_device *spi)
 	int i;
 
 	pr_info("avionics-hi3593: Removing Device\n");
-
-	atomic_set(&hi3593->rx_enabled, 0);
 
 	for (i = 0; i < HI3593_NUM_TX; i++) {
 		if (hi3593->tx[i]) {
@@ -1221,7 +1169,6 @@ static int hi3593_probe(struct spi_device *spi)
 	}
 	spi_set_drvdata(spi, hi3593);
 	mutex_init(&hi3593->lock);
-	atomic_set(&hi3593->rx_enabled, 0);
 
 	err = hi3593_get_config(spi);
 	if (err) {
