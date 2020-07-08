@@ -689,7 +689,16 @@ static void hi3593_rx_worker(struct work_struct *work)
 			}
 
 			if(status & HI3593_FIFO_EMPTY) {
-				break;
+				udelay(1000);
+				status = spi_w8r8(priv->spi, status_cmd);
+				if (unlikely(status < 0)) {
+					pr_err("avionics-hi3593: Failed to"
+					       " read status\n");
+					goto done;
+				}
+				if(status & HI3593_FIFO_EMPTY) {
+					break;
+				}
 			}
 		}
 
@@ -728,7 +737,7 @@ static irqreturn_t hi3593_rx_irq(int irq, void *data)
 	disable_irq_nosync(priv->irq);
 
 	if (atomic_read(priv->rx_enabled)) {
-		queue_delayed_work(priv->wq, &priv->worker, 0);
+		queue_delayed_work(priv->wq, &priv->worker, (5*HZ)/1000);
 	}
 
 	return IRQ_HANDLED;
