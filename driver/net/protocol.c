@@ -212,8 +212,9 @@ static void protocol_rx(struct sk_buff *oskb, struct sock *sk)
 	addr->avionics_family  = AF_AVIONICS;
 	addr->ifindex = skb->dev->ifindex;
 
+	pr_err("avionics-protocol: Buffer Fill: %d %d\n",
+		       atomic_read(&sk->sk_rmem_alloc), sk->sk_rcvbuf);
 	if (sock_queue_rcv_skb(sk, skb) < 0) {
-		pr_err("avionics-protocol: Failed to queue rx message.\n");
 		kfree_skb(skb);
 	}
 }
