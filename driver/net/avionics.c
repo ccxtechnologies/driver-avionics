@@ -151,7 +151,7 @@ static int avionics_packet_rx(struct sk_buff *skb, struct net_device *dev,
 	if (err) {
 		pr_err("avionics: Failed to call protocol rx"
 		       " functions for %s: %d\n", dev->name, err);
-		consume_skb(skb);
+		kfree_skb(skb);
 		return NET_RX_DROP;
 	}
 

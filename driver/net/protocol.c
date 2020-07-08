@@ -213,7 +213,6 @@ static void protocol_rx(struct sk_buff *oskb, struct sock *sk)
 	addr->ifindex = skb->dev->ifindex;
 
 	if (sock_queue_rcv_skb(sk, skb) < 0) {
-		pr_err("avionics-protocol: Failed to queue rx message.\n");
 		kfree_skb(skb);
 	}
 }
