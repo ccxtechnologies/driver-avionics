@@ -198,6 +198,7 @@ static void protocol_rx(struct sk_buff *oskb, struct sock *sk)
 {
 	struct sk_buff *skb;
 	struct sockaddr_avionics *addr;
+	int err;
 
 	/* clone the given skb to be able to enqueue it into the rcv queue */
 	skb = skb_clone(oskb, GFP_ATOMIC);
@@ -212,9 +213,13 @@ static void protocol_rx(struct sk_buff *oskb, struct sock *sk)
 	addr->avionics_family  = AF_AVIONICS;
 	addr->ifindex = skb->dev->ifindex;
 
-	pr_err("avionics-protocol: Buffer Fill: %d %d\n",
-		       atomic_read(&sk->sk_rmem_alloc), sk->sk_rcvbuf);
-	if (sock_queue_rcv_skb(sk, skb) < 0) {
+	err = sock_queue_rcv_skb(sk, skb);
+	if (err < 0) {
+		if (err == -ENOMEM) {
+			pr_err("avionics-protocol: Receive Queue Full, Dropping Packet\n");
+		} else {
+			pr_err("avionics-protocol: Receive Queue Error: %d\n", err);
+		}
 		kfree_skb(skb);
 	}
 }
