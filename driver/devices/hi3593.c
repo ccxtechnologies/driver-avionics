@@ -35,7 +35,7 @@ MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.2.0");
 
 #define HI3593_FIFO_DEPTH		32
-#define HI3593_MTU	(HI3593_FIFO_DEPTH*sizeof(__u32))
+#define HI3593_MTU	(HI3593_FIFO_DEPTH*sizeof(__u32)*6)
 
 #define HI3593_OPCODE_RESET		0x04
 #define HI3593_OPCODE_RD_TX_STATUS	0x80
@@ -114,6 +114,7 @@ struct hi3593_priv {
 	__u8 even_parity;
 	__u8 check_parity;
 	atomic_t *rx_enabled;
+	int rate;
 };
 
 static ssize_t hi3593_get_cntrl(struct hi3593_priv *priv)
@@ -218,6 +219,8 @@ static int hi3593_set_rate(struct avionics_rate *rate,
 		return err;
 	}
 
+	priv->rate = rate->rate_hz;
+
 	return 0;
 }
 
@@ -241,6 +244,8 @@ static void hi3593_get_rate(struct avionics_rate *rate,
 	} else {
 		rate->rate_hz = 100000;
 	}
+
+	priv->rate = rate->rate_hz;
 }
 
 static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
@@ -689,7 +694,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 			}
 
 			if(status & HI3593_FIFO_EMPTY) {
-				udelay(1000);
+				udelay(64000000/priv->rate);
 				status = spi_w8r8(priv->spi, status_cmd);
 				if (unlikely(status < 0)) {
 					pr_err("avionics-hi3593: Failed to"
@@ -737,7 +742,8 @@ static irqreturn_t hi3593_rx_irq(int irq, void *data)
 	disable_irq_nosync(priv->irq);
 
 	if (atomic_read(priv->rx_enabled)) {
-		queue_delayed_work(priv->wq, &priv->worker, (5*HZ)/1000);
+		queue_delayed_work(priv->wq, &priv->worker,
+				   ((HI3593_FIFO_DEPTH/2)*sizeof(__u32)*80*HZ)/priv->rate);
 	}
 
 	return IRQ_HANDLED;
@@ -1086,6 +1092,7 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->rx_index = -1;
 		skb_queue_head_init(&priv->skbq);
 		priv->wq = hi3593->wq;
+		priv->rate = 12500;
 
 		INIT_DELAYED_WORK(&priv->worker, hi3593_tx_worker);
 
@@ -1132,6 +1139,7 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->rx_enabled = &hi3593->rx_enabled[i];
 		skb_queue_head_init(&priv->skbq);
 		priv->wq = hi3593->wq;
+		priv->rate = 12500;
 
 		INIT_DELAYED_WORK(&priv->worker, hi3593_rx_worker);
 
