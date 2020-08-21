@@ -743,7 +743,7 @@ static irqreturn_t hi3593_rx_irq(int irq, void *data)
 
 	if (atomic_read(priv->rx_enabled)) {
 		queue_delayed_work(priv->wq, &priv->worker,
-				   ((HI3593_FIFO_DEPTH/2)*sizeof(__u32)*80*HZ)/priv->rate);
+				   ((HI3593_FIFO_DEPTH/2)*sizeof(__u32)*8*HZ)/priv->rate);
 	}
 
 	return IRQ_HANDLED;
