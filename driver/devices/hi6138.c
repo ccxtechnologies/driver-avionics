@@ -59,9 +59,6 @@ static void hi6138_get_mil1553bm(struct avionics_mil1553bm *config,
 		       const struct net_device *dev)
 {
 	struct hi6138_priv *priv;
-	__u8 rd_priority, rd_filters;
-	ssize_t status;
-	int err;
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
@@ -77,8 +74,6 @@ static int hi6138_set_mil1553bm(struct avionics_mil1553bm *config,
 				 const struct net_device *dev)
 {
 	struct hi6138_priv *priv;
-	__u8 wr_priority[4], wr_filters[33];
-	int err;
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
@@ -143,7 +138,6 @@ static void hi6138_bm_worker(struct work_struct *work)
 	struct net_device *dev;
 	struct net_device_stats *stats;
 	struct hi6138_priv *priv;
-	struct sk_buff *skb;
 
 	priv = container_of((struct delayed_work*)work,
 			    struct hi6138_priv, worker);
@@ -158,9 +152,9 @@ static void hi6138_bm_worker(struct work_struct *work)
 
 	mutex_lock(priv->lock);
 
-	/* TODO: Add IRQ service */
+	/* TODO: Add IRQ service
 
-done:
+done: */
 	mutex_unlock(priv->lock);
 	enable_irq(priv->irq);
 
@@ -177,7 +171,7 @@ static irqreturn_t hi6138_irq(int irq, void *data)
 
 	disable_irq_nosync(priv->irq);
 
-	if (atomic_read(priv->rx_enabled)) {
+	if (atomic_read(priv->bm_enabled)) {
 		queue_delayed_work(priv->wq, &priv->worker, 10); /* TODO: Caluclate a propper delay */
 	}
 
@@ -228,8 +222,8 @@ static int hi6138_get_config(struct spi_device *spi)
 
 	hi6138->irq = irq_of_parse_and_map(dev->of_node, 0);
 	if (hi6138->irq < 0) {
-		pr_err("avionics-hi6138: Failed to"
-		       " get irq %d: %d\n", i, hi6138->irq);
+		pr_err("avionics-hi6138: Failed to get irq: %d\n",
+		       hi6138->irq);
 		return hi6138->irq;
 	}
 
@@ -239,9 +233,6 @@ static int hi6138_get_config(struct spi_device *spi)
 static int hi6138_reset(struct spi_device *spi)
 {
 	struct hi6138 *hi6138 = spi_get_drvdata(spi);
-	__u8 opcode, wr_cmd[2];
-	ssize_t status;
-	int err;
 
 	gpio_set_value(hi6138->reset_gpio, 0);
 	usleep_range(100, 150);
@@ -261,7 +252,7 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 {
 	struct hi6138 *hi6138 = spi_get_drvdata(spi);
 	struct hi6138_priv *priv;
-	int i, err;
+	int err;
 
 	hi6138->wq = alloc_workqueue("hi6138", WQ_HIGHPRI, 0);
 	if (!hi6138->wq) {
@@ -274,7 +265,7 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 
 	if (!hi6138->bm ) {
 		pr_err("avionics-hi6138: Failed to allocate"
-		       " Bus Monitor %d netdev\n", i);
+		       " Bus Monitor netdev\n");
 		return -ENOMEM;
 	}
 
@@ -283,12 +274,13 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 
 	if (!priv) {
 		pr_err("avionics-hi6138: Failed to get private data"
-		       " for Bus Monitor %d\n", i);
+		       " for Bus Monitor\n");
 		return -EINVAL;
 	}
 	priv->dev = hi6138->bm;
 	priv->spi = spi;
 	priv->lock = &hi6138->lock;
+	priv->bm_enabled = &hi6138->bm_enabled;
 	skb_queue_head_init(&priv->skbq);
 	priv->wq = hi6138->wq;
 
@@ -297,17 +289,28 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 	err = hi6138_set_mil1553bm(&avionics_mil1553bm_default,
 				    hi6138->bm);
 	if (err) {
-		pr_err("avionics-hi6138: Failed to set Bus Monitor %d"
-		       " default settings\n", i);
+		pr_err("avionics-hi6138: Failed to set Bus Monitor"
+		       " default settings\n");
 		return -EINVAL;
 	}
 
 	err = avionics_device_register(hi6138->bm);
 	if (err) {
 		pr_err("avionics-hi6138: Failed to register"
-		       " Bus Monitor %d netdev\n", i);
+		       " Bus Monitor netdev\n");
 		return -EINVAL;
 	}
+
+	err = request_irq(hi6138->irq, hi6138_irq,
+			  IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+			  "hi6138", priv);
+	if (err) {
+		pr_err("avionics-hi6138: Failed to register"
+		       " irq %d\n", hi6138->irq);
+		return -EINVAL;
+	}
+	priv->irq = hi6138->irq;
+	disable_irq_nosync(priv->irq);
 
 	return 0;
 }
@@ -316,7 +319,6 @@ static int hi6138_remove(struct spi_device *spi)
 {
 	struct hi6138 *hi6138 = spi_get_drvdata(spi);
 	struct hi6138_priv *priv;
-	int i;
 
 	pr_info("avionics-hi6138: Removing Device\n");
 
