@@ -108,6 +108,11 @@ struct avionics_arinc717tx {
 	__u8 padding[3];
 };
 
+struct avionics_mil1553bm {
+	__u8 flags;
+	__u8 padding[3];
+};
+
 enum {
 	IFLA_AVIONICS_UNSPEC,
 	IFLA_AVIONICS_RATE,
@@ -115,6 +120,7 @@ enum {
 	IFLA_AVIONICS_ARINC429TX,
 	IFLA_AVIONICS_ARINC717RX,
 	IFLA_AVIONICS_ARINC717TX,
+	IFLA_AVIONICS_MIL1553BM,
 	__IFLA_AVIONICS_MAX
 };
 

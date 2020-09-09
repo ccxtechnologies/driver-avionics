@@ -88,6 +88,15 @@ static int device_changelink(struct net_device *dev,
 		return priv->ops->set_arinc717tx(&arinc717tx, dev);
 	}
 
+	if (data[IFLA_AVIONICS_MIL1553BM] && priv->ops &&
+	    priv->ops->set_mil1553bm) {
+		struct avionics_mil1553bm mil1553bm;
+
+		memcpy(&mil1553bm, nla_data(data[IFLA_AVIONICS_MIL1553BM]),
+		       sizeof(mil1553bm));
+		return priv->ops->set_mil1553bm(&mil1553bm, dev);
+	}
+
 	return 0;
 }
 
@@ -114,6 +123,10 @@ static size_t device_get_size(const struct net_device *dev)
 
 	if(priv->ops && priv->ops->set_arinc717tx) {
 		size += nla_total_size(sizeof(struct avionics_arinc717tx));
+	}
+
+	if(priv->ops && priv->ops->set_mil1553bm) {
+		size += nla_total_size(sizeof(struct avionics_mil1553bm));
 	}
 
 	return size;
@@ -180,6 +193,18 @@ static int device_fill_info(struct sk_buff *skb, const struct net_device *dev)
 
 	}
 
+	if (priv->ops && priv->ops->get_mil1553bm) {
+		struct avionics_mil1553bm mil1553bm;
+		priv->ops->get_mil1553bm(&mil1553bm, dev);
+
+		err = nla_put(skb, IFLA_AVIONICS_MIL1553BM,
+			      sizeof(mil1553bm), &mil1553bm);
+		if (err) {
+			return -EMSGSIZE;
+		}
+
+	}
+
 	return 0;
 }
 
@@ -210,6 +235,9 @@ static const struct nla_policy device_policy[IFLA_AVIONICS_MAX + 1] = {
 	},
 	[IFLA_AVIONICS_ARINC717TX] = {
 		.len = sizeof(struct avionics_arinc717tx)
+	},
+	[IFLA_AVIONICS_MIL1553BM] = {
+		.len = sizeof(struct avionics_mil1553bm)
 	},
 };
 

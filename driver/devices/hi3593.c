@@ -735,7 +735,7 @@ static irqreturn_t hi3593_rx_irq(int irq, void *data)
 	struct hi3593_priv *priv = data;
 
 	if (unlikely(irq != priv->irq)) {
-		pr_err("avionics-hi3717a: Unexpected irq %d\n", irq);
+		pr_err("avionics-hi3593: Unexpected irq %d\n", irq);
 		return IRQ_HANDLED;
 	}
 
