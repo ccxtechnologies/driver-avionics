@@ -34,6 +34,28 @@ MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.0.0");
 
+#define HI6138_REG_MEMPTRA		0x000b
+#define HI6138_REG_MEMPTRB		0x000c
+#define HI6138_REG_MEMPTRC		0x000d
+#define HI6138_REG_MEMPTRD		0x000e
+
+#define HI6138_REG_MCFG2		0x004e
+
+#define HI6138_OPCODE_ENABLE_MEMPTRA	0xd8
+#define HI6138_OPCODE_ENABLE_MEMPTRB	0xd9
+#define HI6138_OPCODE_ENABLE_MEMPTRC	0xda
+#define HI6138_OPCODE_ENABLE_MEMPTRD	0xdb
+
+#define HI6138_OPCODE_ADD1_MEMPTR	0xd0
+#define HI6138_OPCODE_ADD2_MEMPTR	0xd2
+#define HI6138_OPCODE_ADD4_MEMPTR	0xd4
+
+#define HI6138_OPCODE_READ_MEMPTR	0x40
+#define HI6138_OPCODE_WRITE_MEMPTR	0xc0
+
+#define HI6138_REG_ACCESS_PTR		HI6138_REG_MEMPTRA
+#define HI6138_OPCODE_REG_ACCESS_PTR	HI6138_OPCODE_ENABLE_MEMPTRA
+
 struct hi6138 {
 	struct net_device *bm;
 	struct workqueue_struct *wq;
@@ -55,10 +77,68 @@ struct hi6138_priv {
 	atomic_t *bm_enabled;
 };
 
-static ssize_t hi6138_get_lowreg(struct spi_device *spi, __u8 read_reg)
+static int hi6138_get_lowreg(struct spi_device *spi, __u8 address, __u16 *value)
 {
-	__u8 cmd = ((read_reg&0x0f) << 2);
-	return spi_w8r16(spi, cmd);
+	int err;
+	__u16 buffer;
+	__u8 cmd = ((address&0x0f) << 2);
+
+	err = spi_write_then_read(spi, &cmd, sizeof(cmd),
+				  &buffer, sizeof(buffer));
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to fast-access read 0x%x\n",
+		       address);
+		return err;
+	}
+
+	*value = be16_to_cpu(buffer);
+
+	return 0;
+}
+
+static int hi6138_set_lowreg(struct spi_device *spi, __u8 address, __u16 value)
+{
+	int err;
+	__u16 vbuffer = cpu_to_be16(value);
+	__u8 buffer[3];
+
+	buffer[0] = 0x80 | (address&0x3f);
+	memcpy(&buffer[1], &vbuffer, 2);
+
+	err = spi_write(spi, buffer, sizeof(buffer));
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to fast-access write 0x%x\n",
+		       address);
+		return err;
+	}
+
+	return 0;
+}
+
+static int hi6138_get_reg(struct spi_device *spi, __u16 address, __u16 *value)
+{
+	int err;
+	__u16 buffer;
+	__u8 cmd = HI6138_OPCODE_REG_ACCESS_PTR;
+
+	err = hi6138_set_lowreg(spi, HI6138_REG_ACCESS_PTR, address);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to set reg address 0x%x\n",
+		       address);
+		return err;
+	}
+
+	err = spi_write_then_read(spi, &cmd, sizeof(cmd),
+				  &buffer, sizeof(buffer));
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to read reg 0x%x\n",
+		       address);
+		return err;
+	}
+
+	*value = be16_to_cpu(buffer);
+
+	return 0;
 }
 
 static void hi6138_get_mil1553bm(struct avionics_mil1553bm *config,
@@ -241,6 +321,9 @@ static int hi6138_get_config(struct spi_device *spi)
 static int hi6138_reset(struct spi_device *spi)
 {
 	struct hi6138 *hi6138 = spi_get_drvdata(spi);
+	__u16 mcfg2;
+	__u8 dev_id, rev_id;
+	int err;
 
 	gpio_set_value(hi6138->reset_gpio, 0);
 	usleep_range(100, 150);
@@ -248,8 +331,31 @@ static int hi6138_reset(struct spi_device *spi)
 
 	/* TODO: Add id check */
 
-	pr_info("avionics-hi6138: IRQ EN 0x%x\n",
-		hi6138_get_lowreg(spi, 0x0f));
+	err = hi6138_get_reg(spi, HI6138_REG_MCFG2, &mcfg2);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed read master config register 2\n");
+		return err;
+	}
+
+	dev_id = (mcfg2>>12)&0x03;
+	rev_id = (mcfg2>>8)&0x0f;
+
+	if (dev_id != 0x03) {
+		pr_err("avionics-hi6138: Wrong Device ID: 0x%x,"
+		       " this is the first verified access from this device"
+		       " so this error could be due to an issue with the device or"
+		       " the SPI bus.\n", dev_id);
+		return -1;
+	}
+
+	if (rev_id != 0x01) {
+		pr_err("avionics-hi6138: Wrong Revision ID: 0x%x\n", rev_id);
+		return -1;
+	}
+
+
+	pr_info("avionics-hi6138: Device ID %d, Revision ID %d\n",
+		dev_id, rev_id);
 
 	pr_info("avionics-hi6138: Device up\n");
 	return 0;
