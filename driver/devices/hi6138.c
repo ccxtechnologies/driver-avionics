@@ -34,6 +34,13 @@ MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.0.0");
 
+#define HI6138_FAST_ACCESS_MCFG1	0
+#define HI6138_REG_MCFG1_TXINHA		(1<<15)
+#define HI6138_REG_MCFG1_TXINHB		(1<<14)
+#define HI6138_REG_MCFG1_MTENA		(1<<8)
+#define HI6138_REG_MCFG1_INTSEL		(1<<2)
+#define HI6138_REG_MCFG1_IMTA		(1<<1)
+
 #define HI6138_REG_MEMPTRA		0x000b
 #define HI6138_REG_MEMPTRB		0x000c
 #define HI6138_REG_MEMPTRC		0x000d
@@ -77,7 +84,7 @@ struct hi6138_priv {
 	atomic_t *bm_enabled;
 };
 
-static int hi6138_get_lowreg(struct spi_device *spi, __u8 address, __u16 *value)
+static int hi6138_get_fastaccess(struct spi_device *spi, __u8 address, __u16 *value)
 {
 	int err;
 	__u16 buffer;
@@ -96,7 +103,7 @@ static int hi6138_get_lowreg(struct spi_device *spi, __u8 address, __u16 *value)
 	return 0;
 }
 
-static int hi6138_set_lowreg(struct spi_device *spi, __u8 address, __u16 value)
+static int hi6138_set_fastaccess(struct spi_device *spi, __u8 address, __u16 value)
 {
 	int err;
 	__u16 vbuffer = cpu_to_be16(value);
@@ -121,7 +128,7 @@ static int hi6138_get_reg(struct spi_device *spi, __u16 address, __u16 *value)
 	__u16 buffer;
 	__u8 cmd = HI6138_OPCODE_REG_ACCESS_PTR;
 
-	err = hi6138_set_lowreg(spi, HI6138_REG_ACCESS_PTR, address);
+	err = hi6138_set_fastaccess(spi, HI6138_REG_ACCESS_PTR, address);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to set reg address 0x%x\n",
 		       address);
@@ -353,9 +360,17 @@ static int hi6138_reset(struct spi_device *spi)
 		return -1;
 	}
 
-
 	pr_info("avionics-hi6138: Device ID %d, Revision ID %d\n",
 		dev_id, rev_id);
+
+	err = hi6138_set_fastaccess(spi, HI6138_FAST_ACCESS_MCFG1,
+				    HI6138_REG_MCFG1_TXINHA |
+				    HI6138_REG_MCFG1_TXINHB |
+				    HI6138_REG_MCFG1_INTSEL);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set master config register 1\n");
+		return err;
+	}
 
 	pr_info("avionics-hi6138: Device up\n");
 	return 0;
