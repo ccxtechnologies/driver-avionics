@@ -55,6 +55,12 @@ struct hi6138_priv {
 	atomic_t *bm_enabled;
 };
 
+static ssize_t hi6138_get_lowreg(struct spi_device *spi, __u8 read_reg)
+{
+	__u8 cmd = ((read_reg&0x0f) << 2);
+	return spi_w8r16(spi, cmd);
+}
+
 static void hi6138_get_mil1553bm(struct avionics_mil1553bm *config,
 		       const struct net_device *dev)
 {
@@ -162,17 +168,19 @@ done: */
 
 static irqreturn_t hi6138_irq(int irq, void *data)
 {
-	struct hi6138_priv *priv = data;
+	struct hi6138 *hi6138 = data;
+	struct hi6138_priv *priv;
 
-	if (unlikely(irq != priv->irq)) {
+	if (unlikely(irq != hi6138->irq)) {
 		pr_err("avionics-hi6138: Unexpected irq %d\n", irq);
 		return IRQ_HANDLED;
 	}
 
-	disable_irq_nosync(priv->irq);
+	disable_irq_nosync(hi6138->irq);
 
-	if (atomic_read(priv->bm_enabled)) {
-		queue_delayed_work(priv->wq, &priv->worker, 10); /* TODO: Caluclate a propper delay */
+	if (atomic_read(&hi6138->bm_enabled)) {
+		priv = avionics_device_priv(hi6138->bm);
+		queue_delayed_work(priv->wq, &priv->worker, 10); /* TODO: Calculate a propper delay */
 	}
 
 	return IRQ_HANDLED;
@@ -240,6 +248,9 @@ static int hi6138_reset(struct spi_device *spi)
 
 	/* TODO: Add id check */
 
+	pr_info("avionics-hi6138: IRQ EN 0x%x\n",
+		hi6138_get_lowreg(spi, 0x0f));
+
 	pr_info("avionics-hi6138: Device up\n");
 	return 0;
 }
@@ -303,7 +314,7 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 
 	err = request_irq(hi6138->irq, hi6138_irq,
 			  IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
-			  "hi6138", priv);
+			  "hi6138", hi6138);
 	if (err) {
 		pr_err("avionics-hi6138: Failed to register"
 		       " irq %d\n", hi6138->irq);
@@ -331,6 +342,10 @@ static int hi6138_remove(struct spi_device *spi)
 		avionics_device_unregister(hi6138->bm);
 		avionics_device_free(hi6138->bm);
 		hi6138->bm = NULL;
+	}
+
+	if (hi6138->irq) {
+		free_irq(hi6138->irq, hi6138);
 	}
 
 	if (hi6138->reset_gpio > 0) {
