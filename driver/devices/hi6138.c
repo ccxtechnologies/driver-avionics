@@ -96,6 +96,7 @@ MODULE_VERSION("1.0.0");
 struct hi6138 {
 	struct net_device *bm;
 	struct workqueue_struct *wq;
+	struct work_struct worker;
 	int reset_gpio;
 	int ackirq_gpio;
 	int irq;
@@ -109,9 +110,6 @@ struct hi6138_priv {
 	struct spi_device *spi;
 	struct sk_buff_head skbq;
 	struct mutex *lock;
-	struct workqueue_struct *wq;
-	struct delayed_work worker;
-	int irq;
 	atomic_t *bm_enabled;
 };
 
@@ -220,7 +218,7 @@ static int hi6138_bm_open(struct net_device *dev)
 {
 	struct hi6138_priv *priv;
 	int err;
-	__u16 mcfg1, hirq;
+	__u16 mcfg1;
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
@@ -261,7 +259,6 @@ static int hi6138_bm_open(struct net_device *dev)
 	}
 
 	atomic_set(priv->bm_enabled, 1);
-	/* TODO: Eanble IRQ == enable_irq(priv->irq); */
 
 	pr_warn("avionics-hi6138-bm: Receiver Enabled\n");
 
@@ -285,7 +282,6 @@ static int hi6138_bm_stop(struct net_device *dev)
 	}
 
 	atomic_set(priv->bm_enabled, 0);
-	disable_irq(priv->irq);
 
 	err = hi6138_get_fastaccess(priv->spi, HI6138_REG_MCFG1, &mcfg1);
 	if (err < 0) {
@@ -315,37 +311,28 @@ static int hi6138_bm_stop(struct net_device *dev)
 	return 0;
 }
 
-static void hi6138_bm_worker(struct work_struct *work)
+static void hi6138_irq_worker(struct work_struct *work)
 {
 	struct net_device *dev;
 	struct net_device_stats *stats;
-	struct hi6138_priv *priv;
+	struct hi6138 *hi6138;
 
-	priv = container_of((struct delayed_work*)work,
-			    struct hi6138_priv, worker);
-	dev = priv->dev;
-	stats = &dev->stats;
+	hi6138 = container_of((struct work_struct*)work,
+	 struct hi6138, worker);
 
-	priv = avionics_device_priv(dev);
-	if (!priv) {
-		pr_err("avionics-hi6138: Failed to get private data\n");
-		return;
-	}
+	mutex_lock(&hi6138->lock);
 
-	mutex_lock(priv->lock);
+	pr_info("avionics-hi6138: IRQ\n");
 
-	/* TODO: Add IRQ service
-
-done: */
-	mutex_unlock(priv->lock);
-	enable_irq(priv->irq);
+done:
+	mutex_unlock(&hi6138->lock);
+	/* enable_irq(hi6138->irq); */
 
 }
 
 static irqreturn_t hi6138_irq(int irq, void *data)
 {
 	struct hi6138 *hi6138 = data;
-	struct hi6138_priv *priv;
 
 	if (unlikely(irq != hi6138->irq)) {
 		pr_err("avionics-hi6138: Unexpected irq %d\n", irq);
@@ -353,11 +340,9 @@ static irqreturn_t hi6138_irq(int irq, void *data)
 	}
 
 	disable_irq_nosync(hi6138->irq);
+	pr_err("avionics-hi6138: irq %d\n", irq);
 
-	if (atomic_read(&hi6138->bm_enabled)) {
-		priv = avionics_device_priv(hi6138->bm);
-		queue_delayed_work(priv->wq, &priv->worker, 10); /* TODO: Calculate a propper delay */
-	}
+	/* queue_work(hi6138->wq, &hi6138->worker); */
 
 	return IRQ_HANDLED;
 }
@@ -420,13 +405,22 @@ static int hi6138_get_config(struct spi_device *spi)
 		}
 	}
 
-
 	hi6138->irq = irq_of_parse_and_map(dev->of_node, 0);
 	if (hi6138->irq < 0) {
 		pr_err("avionics-hi6138: Failed to get irq: %d\n",
 		       hi6138->irq);
 		return hi6138->irq;
 	}
+
+	err = request_irq(hi6138->irq, hi6138_irq,
+			  IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+			  "hi6138", hi6138);
+	if (err) {
+		pr_err("avionics-hi6138: Failed to register"
+		       " irq %d\n", hi6138->irq);
+		return -EINVAL;
+	}
+	disable_irq_nosync(hi6138->irq);
 
 	return 0;
 }
@@ -520,6 +514,7 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 		pr_err("avionics-hi6138: Failed to allocate work-queue\n");
 		return -ENOMEM;
 	}
+	INIT_WORK(&hi6138->worker, hi6138_irq_worker);
 
 	hi6138->bm = avionics_device_alloc(sizeof(*priv),
 					   &hi6138_mil553bm_ops);
@@ -543,9 +538,6 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 	priv->lock = &hi6138->lock;
 	priv->bm_enabled = &hi6138->bm_enabled;
 	skb_queue_head_init(&priv->skbq);
-	priv->wq = hi6138->wq;
-
-	INIT_DELAYED_WORK(&priv->worker, hi6138_bm_worker);
 
 	err = hi6138_set_mil1553bm(&avionics_mil1553bm_default,
 				    hi6138->bm);
@@ -562,16 +554,6 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 		return -EINVAL;
 	}
 
-	err = request_irq(hi6138->irq, hi6138_irq,
-			  IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
-			  "hi6138", hi6138);
-	if (err) {
-		pr_err("avionics-hi6138: Failed to register"
-		       " irq %d\n", hi6138->irq);
-		return -EINVAL;
-	}
-	priv->irq = hi6138->irq;
-	disable_irq_nosync(priv->irq);
 
 	return 0;
 }
@@ -587,16 +569,17 @@ static int hi6138_remove(struct spi_device *spi)
 		priv = avionics_device_priv(hi6138->bm);
 		if (priv) {
 			skb_queue_purge(&priv->skbq);
-			cancel_delayed_work_sync(&priv->worker);
-			if (priv->irq) {
-				free_irq(priv->irq, hi6138);
-			}
 		}
 		avionics_device_unregister(hi6138->bm);
 		avionics_device_free(hi6138->bm);
 		hi6138->bm = NULL;
 	}
 
+	if (hi6138->irq) {
+		free_irq(hi6138->irq, hi6138);
+	}
+
+	cancel_work_sync(&hi6138->worker);
 
 	if (hi6138->reset_gpio > 0) {
 		gpio_set_value(hi6138->reset_gpio, 1);
@@ -653,6 +636,8 @@ static int hi6138_probe(struct spi_device *spi)
 		hi6138_remove(spi);
 		return err;
 	}
+
+	enable_irq(hi6138->irq);
 
 	return 0;
 }
