@@ -42,23 +42,34 @@ MODULE_VERSION("1.0.0");
 #define HI6138_REG_MCFG1_IMTA		(1<<1)
 
 #define HI6138_REG_HIRQ_ENABLE		0x000f
-#define HI6138_REG_IRQ_PENDING		0x0006
+#define HI6138_REG_HIRQ_PENDING		0x0006
 #define HI6138_REG_HIRQ_OUTPUT		0x0013
 
-#define HI6138_REG_IRQ_HSPINT		(1<<15)
-#define HI6138_REG_IRQ_RAMPF		(1<<14)
-#define HI6138_REG_IRQ_RAMIF		(1<<13)
-#define HI6138_REG_IRQ_LBFA		(1<<12)
-#define HI6138_REG_IRQ_LBFB		(1<<11)
-#define HI6138_REG_IRQ_MTTRO		(1<<10)
-#define HI6138_REG_IRQ_BCTTRO		(1<<9)
-#define HI6138_REG_IRQ_RTTM		(1<<7)
-#define HI6138_REG_IRQ_MTTM		(1<<6)
-#define HI6138_REG_IRQ_BCTTM		(1<<5)
-#define HI6138_REG_IRQ_RTAPF		(1<<3)
-#define HI6138_REG_IRQ_RTIP		(1<<2)
-#define HI6138_REG_IRQ_MTIP		(1<<1)
-#define HI6138_REG_IRQ_BCIP		(1<<0)
+#define HI6138_REG_HIRQ_HSPINT		(1<<15)
+#define HI6138_REG_HIRQ_RAMPF		(1<<14)
+#define HI6138_REG_HIRQ_RAMIF		(1<<13)
+#define HI6138_REG_HIRQ_LBFA		(1<<12)
+#define HI6138_REG_HIRQ_LBFB		(1<<11)
+#define HI6138_REG_HIRQ_MTTRO		(1<<10)
+#define HI6138_REG_HIRQ_BCTTRO		(1<<9)
+#define HI6138_REG_HIRQ_RTTM		(1<<7)
+#define HI6138_REG_HIRQ_MTTM		(1<<6)
+#define HI6138_REG_HIRQ_BCTTM		(1<<5)
+#define HI6138_REG_HIRQ_RTAPF		(1<<3)
+#define HI6138_REG_HIRQ_RTIP		(1<<2)
+#define HI6138_REG_HIRQ_MTIP		(1<<1)
+#define HI6138_REG_HIRQ_BCIP		(1<<0)
+
+#define HI6138_REG_SMTIRQ_ENABLE	0x0011
+#define HI6138_REG_SMTIRQ_PENDING	0x0008
+#define HI6138_REG_SMTIRQ_OUTPUT	0x0015
+
+#define HI6138_REG_SMTIRQ_CBUFRO	(1<<8)
+#define HI6138_REG_SMTIRQ_DBUFRO	(1<<7)
+#define HI6138_REG_SMTIRQ_CBUFMAT	(1<<6)
+#define HI6138_REG_SMTIRQ_DBUFMAT	(1<<5)
+#define HI6138_REG_SMTIRQ_SMTMERR	(1<<4)
+#define HI6138_REG_SMTIRQ_SMTEON	(1<<3)
 
 #define HI6138_REG_MEMPTRA		0x000b
 #define HI6138_REG_MEMPTRB		0x000c
@@ -209,7 +220,7 @@ static int hi6138_bm_open(struct net_device *dev)
 {
 	struct hi6138_priv *priv;
 	int err;
-	__u16 mcfg1;
+	__u16 mcfg1, hirq;
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
@@ -232,6 +243,20 @@ static int hi6138_bm_open(struct net_device *dev)
 				    mcfg1|HI6138_REG_MCFG1_MTENA);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed set master config register 1\n");
+		return err;
+	}
+
+	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_SMTIRQ_ENABLE,
+				    HI6138_REG_SMTIRQ_SMTEON);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set SMT IRQ Enable register\n");
+		return err;
+	}
+
+	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_SMTIRQ_OUTPUT,
+				    HI6138_REG_SMTIRQ_SMTEON);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set SMT IRQ Output register\n");
 		return err;
 	}
 
@@ -272,6 +297,18 @@ static int hi6138_bm_stop(struct net_device *dev)
 				    mcfg1&(~HI6138_REG_MCFG1_MTENA));
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed set master config register 1\n");
+		return err;
+	}
+
+	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_SMTIRQ_ENABLE, 0);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set SMT IRQ Enable register\n");
+		return err;
+	}
+
+	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_SMTIRQ_OUTPUT, 0);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set SMT IRQ Output register\n");
 		return err;
 	}
 
@@ -433,25 +470,32 @@ static int hi6138_reset(struct spi_device *spi)
 
 	err = hi6138_set_fastaccess(spi, HI6138_REG_MCFG1,
 				    HI6138_REG_MCFG1_TXINHA |
-				    HI6138_REG_MCFG1_TXINHB);
+				    HI6138_REG_MCFG1_TXINHB |
+				    HI6138_REG_MCFG1_INTSEL);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed set master config register 1\n");
 		return err;
 	}
 
 	err = hi6138_set_fastaccess(spi, HI6138_REG_HIRQ_ENABLE,
-				    HI6138_REG_IRQ_HSPINT |
-				    HI6138_REG_IRQ_RAMPF |
-				    HI6138_REG_IRQ_RAMIF);
+				    HI6138_REG_HIRQ_HSPINT |
+				    HI6138_REG_HIRQ_RAMPF |
+				    HI6138_REG_HIRQ_RAMIF |
+				    HI6138_REG_HIRQ_RTIP |
+				    HI6138_REG_HIRQ_MTIP |
+				    HI6138_REG_HIRQ_BCIP);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed set irq enable register\n");
 		return err;
 	}
 
 	err = hi6138_set_fastaccess(spi, HI6138_REG_HIRQ_OUTPUT,
-				    HI6138_REG_IRQ_HSPINT |
-				    HI6138_REG_IRQ_RAMPF |
-				    HI6138_REG_IRQ_RAMIF);
+				    HI6138_REG_HIRQ_HSPINT |
+				    HI6138_REG_HIRQ_RAMPF |
+				    HI6138_REG_HIRQ_RAMIF |
+				    HI6138_REG_HIRQ_RTIP |
+				    HI6138_REG_HIRQ_MTIP |
+				    HI6138_REG_HIRQ_BCIP);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed set irq output register\n");
 		return err;
