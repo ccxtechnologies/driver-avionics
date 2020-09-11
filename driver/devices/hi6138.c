@@ -34,12 +34,31 @@ MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.0.0");
 
-#define HI6138_FAST_ACCESS_MCFG1	0
+#define HI6138_REG_MCFG1		0x0000
 #define HI6138_REG_MCFG1_TXINHA		(1<<15)
 #define HI6138_REG_MCFG1_TXINHB		(1<<14)
 #define HI6138_REG_MCFG1_MTENA		(1<<8)
 #define HI6138_REG_MCFG1_INTSEL		(1<<2)
 #define HI6138_REG_MCFG1_IMTA		(1<<1)
+
+#define HI6138_REG_HIRQ_ENABLE		0x000f
+#define HI6138_REG_IRQ_PENDING		0x0006
+#define HI6138_REG_HIRQ_OUTPUT		0x0013
+
+#define HI6138_REG_IRQ_HSPINT		(1<<15)
+#define HI6138_REG_IRQ_RAMPF		(1<<14)
+#define HI6138_REG_IRQ_RAMIF		(1<<13)
+#define HI6138_REG_IRQ_LBFA		(1<<12)
+#define HI6138_REG_IRQ_LBFB		(1<<11)
+#define HI6138_REG_IRQ_MTTRO		(1<<10)
+#define HI6138_REG_IRQ_BCTTRO		(1<<9)
+#define HI6138_REG_IRQ_RTTM		(1<<7)
+#define HI6138_REG_IRQ_MTTM		(1<<6)
+#define HI6138_REG_IRQ_BCTTM		(1<<5)
+#define HI6138_REG_IRQ_RTAPF		(1<<3)
+#define HI6138_REG_IRQ_RTIP		(1<<2)
+#define HI6138_REG_IRQ_MTIP		(1<<1)
+#define HI6138_REG_IRQ_BCIP		(1<<0)
 
 #define HI6138_REG_MEMPTRA		0x000b
 #define HI6138_REG_MEMPTRB		0x000c
@@ -67,6 +86,7 @@ struct hi6138 {
 	struct net_device *bm;
 	struct workqueue_struct *wq;
 	int reset_gpio;
+	int ackirq_gpio;
 	int irq;
 	__u32 aclk;
 	struct mutex lock;
@@ -188,6 +208,8 @@ static struct avionics_ops hi6138_mil553bm_ops = {
 static int hi6138_bm_open(struct net_device *dev)
 {
 	struct hi6138_priv *priv;
+	int err;
+	__u16 mcfg1;
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
@@ -200,8 +222,23 @@ static int hi6138_bm_open(struct net_device *dev)
 		return 0;
 	}
 
+	err = hi6138_get_fastaccess(priv->spi, HI6138_REG_MCFG1, &mcfg1);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed read master config register 1\n");
+		return err;
+	}
+
+	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_MCFG1,
+				    mcfg1|HI6138_REG_MCFG1_MTENA);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set master config register 1\n");
+		return err;
+	}
+
 	atomic_set(priv->bm_enabled, 1);
-	enable_irq(priv->irq);
+	/* TODO: Eanble IRQ == enable_irq(priv->irq); */
+
+	pr_warn("avionics-hi6138-bm: Receiver Enabled\n");
 
 	return 0;
 }
@@ -209,6 +246,8 @@ static int hi6138_bm_open(struct net_device *dev)
 static int hi6138_bm_stop(struct net_device *dev)
 {
 	struct hi6138_priv *priv;
+	int err;
+	__u16 mcfg1;
 
 	pr_warn("avionics-hi6138-bm: Disabling Receiver\n");
 
@@ -222,6 +261,19 @@ static int hi6138_bm_stop(struct net_device *dev)
 
 	atomic_set(priv->bm_enabled, 0);
 	disable_irq(priv->irq);
+
+	err = hi6138_get_fastaccess(priv->spi, HI6138_REG_MCFG1, &mcfg1);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed read master config register 1\n");
+		return err;
+	}
+
+	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_MCFG1,
+				    mcfg1&(~HI6138_REG_MCFG1_MTENA));
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set master config register 1\n");
+		return err;
+	}
 
 	return 0;
 }
@@ -315,6 +367,23 @@ static int hi6138_get_config(struct spi_device *spi)
 		}
 	}
 
+	hi6138->ackirq_gpio = of_get_named_gpio(dev->of_node, "ackirq-gpio", 0);
+	if (hi6138->ackirq_gpio > 0 ) {
+		if (!gpio_is_valid(hi6138->ackirq_gpio)) {
+			pr_err("avionics-hi6138: ACKIRQ GPIO is not valid\n");
+			return -EINVAL;
+		}
+
+		err = devm_gpio_request_one(&spi->dev, hi6138->ackirq_gpio,
+					    GPIOF_OUT_INIT_LOW, "ackirq");
+		if (err) {
+			pr_err("avionics-hi6138: Failed to"
+			       " register ACKIRQ GPIO\n");
+			return err;
+		}
+	}
+
+
 	hi6138->irq = irq_of_parse_and_map(dev->of_node, 0);
 	if (hi6138->irq < 0) {
 		pr_err("avionics-hi6138: Failed to get irq: %d\n",
@@ -333,10 +402,9 @@ static int hi6138_reset(struct spi_device *spi)
 	int err;
 
 	gpio_set_value(hi6138->reset_gpio, 0);
-	usleep_range(100, 150);
+	usleep_range(1000, 1500);
 	gpio_set_value(hi6138->reset_gpio, 1);
-
-	/* TODO: Add id check */
+	usleep_range(1000, 1500);
 
 	err = hi6138_get_reg(spi, HI6138_REG_MCFG2, &mcfg2);
 	if (err < 0) {
@@ -363,12 +431,29 @@ static int hi6138_reset(struct spi_device *spi)
 	pr_info("avionics-hi6138: Device ID %d, Revision ID %d\n",
 		dev_id, rev_id);
 
-	err = hi6138_set_fastaccess(spi, HI6138_FAST_ACCESS_MCFG1,
+	err = hi6138_set_fastaccess(spi, HI6138_REG_MCFG1,
 				    HI6138_REG_MCFG1_TXINHA |
-				    HI6138_REG_MCFG1_TXINHB |
-				    HI6138_REG_MCFG1_INTSEL);
+				    HI6138_REG_MCFG1_TXINHB);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed set master config register 1\n");
+		return err;
+	}
+
+	err = hi6138_set_fastaccess(spi, HI6138_REG_HIRQ_ENABLE,
+				    HI6138_REG_IRQ_HSPINT |
+				    HI6138_REG_IRQ_RAMPF |
+				    HI6138_REG_IRQ_RAMIF);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set irq enable register\n");
+		return err;
+	}
+
+	err = hi6138_set_fastaccess(spi, HI6138_REG_HIRQ_OUTPUT,
+				    HI6138_REG_IRQ_HSPINT |
+				    HI6138_REG_IRQ_RAMPF |
+				    HI6138_REG_IRQ_RAMIF);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set irq output register\n");
 		return err;
 	}
 
@@ -459,15 +544,15 @@ static int hi6138_remove(struct spi_device *spi)
 		if (priv) {
 			skb_queue_purge(&priv->skbq);
 			cancel_delayed_work_sync(&priv->worker);
+			if (priv->irq) {
+				free_irq(priv->irq, hi6138);
+			}
 		}
 		avionics_device_unregister(hi6138->bm);
 		avionics_device_free(hi6138->bm);
 		hi6138->bm = NULL;
 	}
 
-	if (hi6138->irq) {
-		free_irq(hi6138->irq, hi6138);
-	}
 
 	if (hi6138->reset_gpio > 0) {
 		gpio_set_value(hi6138->reset_gpio, 1);
