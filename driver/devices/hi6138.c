@@ -71,6 +71,13 @@ MODULE_VERSION("1.0.0");
 #define HI6138_REG_SMTIRQ_SMTMERR	(1<<4)
 #define HI6138_REG_SMTIRQ_SMTEON	(1<<3)
 
+#define HI6138_REG_SMTLAST		0x0031
+
+#define HI6138_REG_SMTCFG		0x0029
+#define HI6138_REG_SMTCFG_MTTO_LONG	(3<<14)
+#define HI6138_REG_SMTCFG_MTSRR_ANY	(3<<5)
+#define HI6138_REG_SMTCFG_MTCRIW	(1<<4)
+
 #define HI6138_REG_MEMPTRA		0x000b
 #define HI6138_REG_MEMPTRB		0x000c
 #define HI6138_REG_MEMPTRC		0x000d
@@ -103,6 +110,7 @@ struct hi6138 {
 	__u32 aclk;
 	struct mutex lock;
 	atomic_t bm_enabled;
+	struct spi_device *spi;
 };
 
 struct hi6138_priv {
@@ -233,28 +241,37 @@ static int hi6138_bm_open(struct net_device *dev)
 
 	err = hi6138_get_fastaccess(priv->spi, HI6138_REG_MCFG1, &mcfg1);
 	if (err < 0) {
-		pr_err("avionics-hi6138: Failed read master config register 1\n");
+		pr_err("avionics-hi6138-bm: Failed read master config register 1\n");
 		return err;
 	}
 
 	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_MCFG1,
 				    mcfg1|HI6138_REG_MCFG1_MTENA);
 	if (err < 0) {
-		pr_err("avionics-hi6138: Failed set master config register 1\n");
+		pr_err("avionics-hi6138-bm: Failed set master config register 1\n");
 		return err;
 	}
 
 	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_SMTIRQ_ENABLE,
 				    HI6138_REG_SMTIRQ_SMTEON);
 	if (err < 0) {
-		pr_err("avionics-hi6138: Failed set SMT IRQ Enable register\n");
+		pr_err("avionics-hi6138-bm: Failed set SMT IRQ Enable register\n");
 		return err;
 	}
 
 	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_SMTIRQ_OUTPUT,
 				    HI6138_REG_SMTIRQ_SMTEON);
 	if (err < 0) {
-		pr_err("avionics-hi6138: Failed set SMT IRQ Output register\n");
+		pr_err("avionics-hi6138-bm: Failed set SMT IRQ Output register\n");
+		return err;
+	}
+
+	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_SMTCFG, 0x0801
+				    | HI6138_REG_SMTCFG_MTTO_LONG
+				    | HI6138_REG_SMTCFG_MTSRR_ANY
+				    | HI6138_REG_SMTCFG_MTCRIW);
+	if (err < 0) {
+		pr_err("avionics-hi6138-bm: Failed set SMT config register\n");
 		return err;
 	}
 
@@ -311,22 +328,80 @@ static int hi6138_bm_stop(struct net_device *dev)
 	return 0;
 }
 
+static int hi6138_irq_bm(struct net_device *dev)
+{
+	struct hi6138_priv *priv;
+	__u16 smtirq_status, last_addr;
+	int err;
+
+	priv = avionics_device_priv(dev);
+	if (!priv) {
+		pr_err("avionics-hi6138-bm: Failed to get private data\n");
+		return -EINVAL;
+	}
+
+	err = hi6138_get_fastaccess(priv->spi, HI6138_REG_SMTIRQ_PENDING,
+				    &smtirq_status);
+	if (err < 0) {
+		pr_err("avionics-hi6138-bm: Failed read irq"
+		       " pending register\n");
+		return err;
+	}
+
+	pr_info("avionics-hi6138-bm: smt irq pending 0x%x\n", smtirq_status);
+
+	if (smtirq_status & HI6138_REG_SMTIRQ_SMTEON) {
+		err = hi6138_get_reg(priv->spi, HI6138_REG_SMTLAST, &last_addr);
+		if (err < 0) {
+			pr_err("avionics-hi6138-bm: Failed read"
+			       " last address register\n");
+			return err;
+		}
+
+		pr_info("avionics-hi6138-bm: last address 0x%x\n", last_addr);
+	}
+
+	return 0;
+}
+
 static void hi6138_irq_worker(struct work_struct *work)
 {
 	struct net_device *dev;
 	struct net_device_stats *stats;
 	struct hi6138 *hi6138;
+	__u16 hirq_status;
+	int err;
 
 	hi6138 = container_of((struct work_struct*)work,
-	 struct hi6138, worker);
+			      struct hi6138, worker);
 
 	mutex_lock(&hi6138->lock);
 
 	pr_info("avionics-hi6138: IRQ\n");
 
+	err = hi6138_get_fastaccess(hi6138->spi, HI6138_REG_HIRQ_PENDING,
+				    &hirq_status);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed read hirq pending register\n");
+		goto done;
+	}
+
+	pr_info("avionics-hi6138: hirq pending 0x%x\n", hirq_status);
+
+	if(hirq_status & HI6138_REG_HIRQ_MTIP) {
+		err = hi6138_irq_bm(hi6138->bm);
+		if (err < 0) {
+			pr_err("avionics-hi6138: Bus Monitor IRQ failure\n");
+		}
+	}
+
 done:
+	gpio_set_value(hi6138->ackirq_gpio, 1);
+	udelay(1);
+	gpio_set_value(hi6138->ackirq_gpio, 0);
+
 	mutex_unlock(&hi6138->lock);
-	/* enable_irq(hi6138->irq); */
+	enable_irq(hi6138->irq);
 
 }
 
@@ -340,9 +415,8 @@ static irqreturn_t hi6138_irq(int irq, void *data)
 	}
 
 	disable_irq_nosync(hi6138->irq);
-	pr_err("avionics-hi6138: irq %d\n", irq);
 
-	/* queue_work(hi6138->wq, &hi6138->worker); */
+	queue_work(hi6138->wq, &hi6138->worker);
 
 	return IRQ_HANDLED;
 }
@@ -495,7 +569,7 @@ static int hi6138_reset(struct spi_device *spi)
 		return err;
 	}
 
-	pr_info("avionics-hi6138: Device up\n");
+	pr_info("avionics-hi6138: device reset\n");
 	return 0;
 }
 
@@ -612,6 +686,7 @@ static int hi6138_probe(struct spi_device *spi)
 	spi_set_drvdata(spi, hi6138);
 	mutex_init(&hi6138->lock);
 	atomic_set(&hi6138->bm_enabled, 0);
+	hi6138->spi = spi;
 
 	err = hi6138_get_config(spi);
 	if (err) {
