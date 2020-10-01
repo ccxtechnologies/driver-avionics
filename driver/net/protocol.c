@@ -25,6 +25,8 @@
 #include "socket-list.h"
 #include "avionics.h"
 
+static int queue_error_mask = 0;
+
 void protocol_init_skb(struct net_device *dev, struct sk_buff *skb)
 {
 	skb->dev = dev;
@@ -216,7 +218,10 @@ static void protocol_rx(struct sk_buff *oskb, struct sock *sk)
 	err = sock_queue_rcv_skb(sk, skb);
 	if (err < 0) {
 		if (err == -ENOMEM) {
-			pr_err("avionics-protocol: Receive Queue Full, Dropping Packet\n");
+			if ((queue_error_mask % 20) == 0) {
+				pr_err("avionics-protocol: Receive Queue Full, Dropping Packet\n");
+			}
+			queue_error_mask++;
 		} else {
 			pr_err("avionics-protocol: Receive Queue Error: %d\n", err);
 		}
