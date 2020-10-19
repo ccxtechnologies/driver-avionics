@@ -673,7 +673,7 @@ static int hi3717a_rxfifo_read(struct hi3717a_priv *priv,
 	__u32 vbuffer;
 
 	spi_message_init(&message);
-	memset(opcodes, 0, sizeof(opcodes));
+	memset(opcodes, 0, sizeof(*opcodes));
 
 	rd_cmd[0] = HI3717A_OPCODE_RD_RXFIFO;
 
