@@ -122,8 +122,10 @@ static const struct proto_ops protocol_raw_ops = {
 	.accept		= sock_no_accept,
 	.listen		= sock_no_listen,
 	.shutdown	= sock_no_shutdown,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,9,0)
 	.setsockopt	= sock_no_setsockopt,
 	.getsockopt	= sock_no_getsockopt,
+#endif
 	.mmap		= sock_no_mmap,
 	.sendpage	= sock_no_sendpage,
 
