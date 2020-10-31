@@ -90,6 +90,10 @@ MODULE_VERSION("1.2.0");
 #define HI3593_NUM_TX	1
 #define HI3593_NUM_RX	2
 
+#define HI3593_RX_DELAY_MULTIPLIER_MAX	 ((HI3593_FIFO_DEPTH/2+4)*sizeof(__u32)*1000000)
+#define HI3593_RX_DELAY_MULTIPLIER_MIN	 ((HI3593_FIFO_DEPTH/2)*sizeof(__u32)*1000000)
+#define HI3593_RX_HALF_FILL_MULTIPLIER	 ((HI3593_FIFO_DEPTH/2+2)*sizeof(__u32)*HZ)
+
 struct hi3593 {
 	struct net_device *rx[HI3593_NUM_RX];
 	struct net_device *tx[HI3593_NUM_TX];
@@ -115,6 +119,9 @@ struct hi3593_priv {
 	__u8 check_parity;
 	atomic_t *rx_enabled;
 	int rate;
+	unsigned long rx_udelay_min;
+	unsigned long rx_udelay_max;
+	unsigned long rx_wrk_delay;
 };
 
 static ssize_t hi3593_get_cntrl(struct hi3593_priv *priv)
@@ -220,6 +227,9 @@ static int hi3593_set_rate(struct avionics_rate *rate,
 	}
 
 	priv->rate = rate->rate_hz;
+	priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
+	priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
+	priv->rx_wrk_delay = HI3593_RX_HALF_FILL_MULTIPLIER/priv->rate;
 
 	return 0;
 }
@@ -246,6 +256,9 @@ static void hi3593_get_rate(struct avionics_rate *rate,
 	}
 
 	priv->rate = rate->rate_hz;
+	priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
+	priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
+	priv->rx_wrk_delay = HI3593_RX_HALF_FILL_MULTIPLIER/priv->rate;
 }
 
 static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
@@ -694,7 +707,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 			}
 
 			if(status & HI3593_FIFO_EMPTY) {
-				udelay(64000000/priv->rate);
+				usleep_range(priv->rx_udelay_min,
+					     priv->rx_udelay_max);
 				status = spi_w8r8(priv->spi, status_cmd);
 				if (unlikely(status < 0)) {
 					pr_err("avionics-hi3593: Failed to"
@@ -742,8 +756,7 @@ static irqreturn_t hi3593_rx_irq(int irq, void *data)
 	disable_irq_nosync(priv->irq);
 
 	if (atomic_read(priv->rx_enabled)) {
-		queue_delayed_work(priv->wq, &priv->worker,
-				   ((HI3593_FIFO_DEPTH/2)*sizeof(__u32)*8*HZ)/priv->rate);
+		queue_delayed_work(priv->wq, &priv->worker, priv->rx_wrk_delay);
 	}
 
 	return IRQ_HANDLED;
@@ -1093,6 +1106,9 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		skb_queue_head_init(&priv->skbq);
 		priv->wq = hi3593->wq;
 		priv->rate = 12500;
+		priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
+		priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
+		priv->rx_wrk_delay = HI3593_RX_HALF_FILL_MULTIPLIER/priv->rate;
 
 		INIT_DELAYED_WORK(&priv->worker, hi3593_tx_worker);
 
@@ -1140,6 +1156,9 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		skb_queue_head_init(&priv->skbq);
 		priv->wq = hi3593->wq;
 		priv->rate = 12500;
+		priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
+		priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
+		priv->rx_wrk_delay = HI3593_RX_HALF_FILL_MULTIPLIER/priv->rate;
 
 		INIT_DELAYED_WORK(&priv->worker, hi3593_rx_worker);
 
