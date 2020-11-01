@@ -218,7 +218,7 @@ static void protocol_rx(struct sk_buff *oskb, struct sock *sk)
 	err = sock_queue_rcv_skb(sk, skb);
 	if (err < 0) {
 		if (err == -ENOMEM) {
-			if ((queue_error_mask % 20) == 0) {
+			if ((queue_error_mask % 500) == 0) {
 				pr_err("avionics-protocol: Receive Queue Full, Dropping Packet\n");
 			}
 			queue_error_mask++;
