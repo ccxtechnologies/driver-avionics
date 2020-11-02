@@ -49,7 +49,18 @@
 
 /* ================= Defintions for Socket Interface =================== */
 
-#define AVIONICS_PROTO_RAW	1
+#define AVIONICS_PROTO_RAW		1
+#define AVIONICS_PROTO_TIMESTAMP	2
+
+struct __attribute__((__packed__)) avionics_proto_raw_data {
+	__u32 value;
+};
+
+struct __attribute__((__packed__)) avionics_proto_timestamp_data {
+	__s64 time_secs;
+	__s64 time_usecs;
+	__u32 value;
+};
 
 struct sockaddr_avionics {
 	__kernel_sa_family_t avionics_family;

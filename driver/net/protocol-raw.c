@@ -70,13 +70,17 @@ static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 	return size;
 }
 
+#define PROTOCOL_SIZE_FROM_DEVICE (sizeof(struct avionics_proto_timestamp_data))
+
 static int protocol_raw_recvmsg(struct socket *sock,
 				struct msghdr *msg, size_t size, int flags)
 {
 	struct sock *sk = sock->sk;
 	struct sk_buff *skb;
+	__u8 *buffer;
+
 	int err = 0;
-	int noblock;
+	int noblock, i, num_samples, buffer_size;
 
 	noblock = flags & MSG_DONTWAIT;
 	flags &= ~MSG_DONTWAIT;
@@ -87,16 +91,32 @@ static int protocol_raw_recvmsg(struct socket *sock,
 		return err;
 	}
 
-	if (size < skb->len) {
-		msg->msg_flags |= MSG_TRUNC;
-	} else {
-		size = skb->len;
+	num_samples = size/PROTOCOL_SIZE_FROM_DEVICE;
+	buffer_size = num_samples*sizeof(__u32);
+
+	if (buffer_size > skb->len) {
+		num_samples = skb->len/PROTOCOL_SIZE_FROM_DEVICE;
+		buffer_size = num_samples*sizeof(__u32);
+		size = num_samples*PROTOCOL_SIZE_FROM_DEVICE;
 	}
 
-	err = memcpy_to_msg(msg, skb->data, size);
+	if (buffer_size < skb->len) {
+		msg->msg_flags |= MSG_TRUNC;
+	}
+
+	buffer = kmalloc(buffer_size, GFP_KERNEL);
+	for(i = 0; i < num_samples; i++) {
+		buffer[i*4] = skb->data[i*sizeof(struct avionics_proto_timestamp_data)+16];
+		buffer[i*4+1] = skb->data[i*sizeof(struct avionics_proto_timestamp_data)+17];
+		buffer[i*4+2] = skb->data[i*sizeof(struct avionics_proto_timestamp_data)+18];
+		buffer[i*4+3] = skb->data[i*sizeof(struct avionics_proto_timestamp_data)+19];
+	}
+
+	err = memcpy_to_msg(msg, buffer, buffer_size);
 	if (err < 0) {
 		pr_err("avionics-protocol-raw: Failed to copy message data.\n");
 		skb_free_datagram(sk, skb);
+		kfree(buffer);
 		return err;
 	}
 
@@ -109,6 +129,7 @@ static int protocol_raw_recvmsg(struct socket *sock,
 	}
 
 	skb_free_datagram(sk, skb);
+	kfree(buffer);
 
 	return size;
 }

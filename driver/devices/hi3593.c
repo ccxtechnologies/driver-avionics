@@ -25,6 +25,7 @@
 #include <linux/of_gpio.h>
 #include <linux/of_irq.h>
 #include <linux/interrupt.h>
+#include <linux/time.h>
 
 #include "avionics.h"
 #include "avionics-device.h"
@@ -34,8 +35,9 @@ MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.2.0");
 
-#define HI3593_FIFO_DEPTH		32
-#define HI3593_MTU	(HI3593_FIFO_DEPTH*sizeof(__u32)*6)
+#define HI3593_FIFO_DEPTH	32
+#define HI3593_SAMPLE_SIZE	(sizeof(struct avionics_proto_timestamp_data))
+#define HI3593_MTU		(HI3593_FIFO_DEPTH*HI3593_SAMPLE_SIZE*8)
 
 #define HI3593_OPCODE_RESET		0x04
 #define HI3593_OPCODE_RD_TX_STATUS	0x80
@@ -536,7 +538,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 	struct net_device_stats *stats;
 	struct hi3593_priv *priv;
 	struct sk_buff *skb;
-	__u8 status_cmd, rd_cmd, data[HI3593_MTU], buffer[4];
+	struct timeval tv;
+	__u8 status_cmd, rd_cmd, *data, buffer[4];
 	__u8 pl_cmd[3], pl_rd, pl[3];
 	const __u8 pl_bits[3] = {HI3593_PRIORITY_LABEL1,
 		HI3593_PRIORITY_LABEL2, HI3593_PRIORITY_LABEL3};
@@ -570,6 +573,12 @@ static void hi3593_rx_worker(struct work_struct *work)
 		pl_rd = HI3593_OPCODE_RD_RX2_PRIORITY;
 	} else {
 		pr_err("avionics-hi3593: No valid port index\n");
+		return;
+	}
+
+	data = kmalloc(HI3593_MTU, GFP_KERNEL);
+	if (data == NULL) {
+		pr_err("avionics-hi3593: Failed to allocate data buffer\n");
 		return;
 	}
 
@@ -615,34 +624,71 @@ static void hi3593_rx_worker(struct work_struct *work)
 					buffer[0] &= 0x7f;
 				}
 
-				skb = avionics_device_alloc_skb(dev,
-								sizeof(__u32));
+				skb = avionics_device_alloc_skb(dev,HI3593_SAMPLE_SIZE);
 				if (unlikely(!skb)) {
 					pr_err("avionics-lb: Failed to"
 					       " allocate RX buffer\n");
 					goto done;
 				}
 
+				do_gettimeofday(&tv);
+
 				#if defined(__LITTLE_ENDIAN)
 
-				data[0] = buffer[3];
-				data[1] = buffer[2];
-				data[2] = buffer[1];
-				data[3] = buffer[0];
+				data[cnt+7] = (tv.tv_sec&0xff00000000000000) >> 56;
+				data[cnt+6] = (tv.tv_sec&0x00ff000000000000) >> 48;
+				data[cnt+5] = (tv.tv_sec&0x0000ff0000000000) >> 40;
+				data[cnt+4] = (tv.tv_sec&0x000000ff00000000) >> 32;
+				data[cnt+3] = (tv.tv_sec&0x00000000ff000000) >> 24;
+				data[cnt+2] = (tv.tv_sec&0x0000000000ff0000) >> 16;
+				data[cnt+1] = (tv.tv_sec&0x000000000000ff00) >> 8;
+				data[cnt]   = (tv.tv_sec&0x00000000000000ff);
+
+				data[cnt+15] = (tv.tv_usec&0xff00000000000000) >> 56;
+				data[cnt+14] = (tv.tv_usec&0x00ff000000000000) >> 48;
+				data[cnt+13] = (tv.tv_usec&0x0000ff0000000000) >> 40;
+				data[cnt+12] = (tv.tv_usec&0x000000ff00000000) >> 32;
+				data[cnt+11] = (tv.tv_usec&0x00000000ff000000) >> 24;
+				data[cnt+10] = (tv.tv_usec&0x0000000000ff0000) >> 16;
+				data[cnt+9]  = (tv.tv_usec&0x000000000000ff00) >> 8;
+				data[cnt+8]  = (tv.tv_usec&0x00000000000000ff);
+
+				data[cnt+16] = buffer[3];
+				data[cnt+17] = buffer[2];
+				data[cnt+18] = buffer[1];
+				data[cnt+19] = buffer[0];
 
 				#elif defined(__BIG_ENDIAN)
 
-				data[0] = buffer[0];
-				data[1] = buffer[1];
-				data[2] = buffer[2];
-				data[3] = buffer[3];
+				data[cnt]   = (tv.tv_sec&0xff00000000000000) >> 56;
+				data[cnt+1] = (tv.tv_sec&0x00ff000000000000) >> 48;
+				data[cnt+2] = (tv.tv_sec&0x0000ff0000000000) >> 40;
+				data[cnt+3] = (tv.tv_sec&0x000000ff00000000) >> 32;
+				data[cnt+4] = (tv.tv_sec&0x00000000ff000000) >> 24;
+				data[cnt+5] = (tv.tv_sec&0x0000000000ff0000) >> 16;
+				data[cnt+6] = (tv.tv_sec&0x000000000000ff00) >> 8;
+				data[cnt+7] = (tv.tv_sec&0x00000000000000ff);
+
+				data[cnt+8]  = (tv.tv_usec&0xff00000000000000) >> 56;
+				data[cnt+9]  = (tv.tv_usec&0x00ff000000000000) >> 48;
+				data[cnt+10] = (tv.tv_usec&0x0000ff0000000000) >> 40;
+				data[cnt+11] = (tv.tv_usec&0x000000ff00000000) >> 32;
+				data[cnt+12] = (tv.tv_usec&0x00000000ff000000) >> 24;
+				data[cnt+13] = (tv.tv_usec&0x0000000000ff0000) >> 16;
+				data[cnt+14] = (tv.tv_usec&0x000000000000ff00) >> 8;
+				data[cnt+15] = (tv.tv_usec&0x00000000000000ff);
+
+				data[cnt+16] = buffer[0];
+				data[cnt+17] = buffer[1];
+				data[cnt+18] = buffer[2];
+				data[cnt+19] = buffer[3];
 
 				#else
 				#error Endianness not defined...
 				#endif
 
-				skb_copy_to_linear_data(skb, data,
-							sizeof(__u32));
+				skb_copy_to_linear_data(skb, data, HI3593_SAMPLE_SIZE);
+
 				stats->rx_packets++;
 				stats->rx_bytes += skb->len;
 				netif_rx_ni(skb);
@@ -655,7 +701,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 
 	cnt = 0;
 	if (!(status & HI3593_FIFO_EMPTY)) {
-		for (i = 0; i < HI3593_MTU; i += sizeof(__u32)) {
+		for (i = 0; i < HI3593_MTU; i += HI3593_SAMPLE_SIZE) {
 
 			err = spi_write_then_read(priv->spi, &rd_cmd,
 						  sizeof(rd_cmd),
@@ -674,25 +720,63 @@ static void hi3593_rx_worker(struct work_struct *work)
 					buffer[0] &= 0x7f;
 				}
 
+				do_gettimeofday(&tv);
+
 				#if defined(__LITTLE_ENDIAN)
 
-				data[cnt] = buffer[3];
-				data[cnt+1] = buffer[2];
-				data[cnt+2] = buffer[1];
-				data[cnt+3] = buffer[0];
+				data[cnt+7] = (tv.tv_sec&0xff00000000000000) >> 56;
+				data[cnt+6] = (tv.tv_sec&0x00ff000000000000) >> 48;
+				data[cnt+5] = (tv.tv_sec&0x0000ff0000000000) >> 40;
+				data[cnt+4] = (tv.tv_sec&0x000000ff00000000) >> 32;
+				data[cnt+3] = (tv.tv_sec&0x00000000ff000000) >> 24;
+				data[cnt+2] = (tv.tv_sec&0x0000000000ff0000) >> 16;
+				data[cnt+1] = (tv.tv_sec&0x000000000000ff00) >> 8;
+				data[cnt]   = (tv.tv_sec&0x00000000000000ff);
+
+				data[cnt+15] = (tv.tv_usec&0xff00000000000000) >> 56;
+				data[cnt+14] = (tv.tv_usec&0x00ff000000000000) >> 48;
+				data[cnt+13] = (tv.tv_usec&0x0000ff0000000000) >> 40;
+				data[cnt+12] = (tv.tv_usec&0x000000ff00000000) >> 32;
+				data[cnt+11] = (tv.tv_usec&0x00000000ff000000) >> 24;
+				data[cnt+10] = (tv.tv_usec&0x0000000000ff0000) >> 16;
+				data[cnt+9]  = (tv.tv_usec&0x000000000000ff00) >> 8;
+				data[cnt+8]  = (tv.tv_usec&0x00000000000000ff);
+
+				data[cnt+16] = buffer[3];
+				data[cnt+17] = buffer[2];
+				data[cnt+18] = buffer[1];
+				data[cnt+19] = buffer[0];
 
 				#elif defined(__BIG_ENDIAN)
 
-				data[cnt] = buffer[0];
-				data[cnt+1] = buffer[1];
-				data[cnt+2] = buffer[2];
-				data[cnt+3] = buffer[3];
+				data[cnt]   = (tv.tv_sec&0xff00000000000000) >> 56;
+				data[cnt+1] = (tv.tv_sec&0x00ff000000000000) >> 48;
+				data[cnt+2] = (tv.tv_sec&0x0000ff0000000000) >> 40;
+				data[cnt+3] = (tv.tv_sec&0x000000ff00000000) >> 32;
+				data[cnt+4] = (tv.tv_sec&0x00000000ff000000) >> 24;
+				data[cnt+5] = (tv.tv_sec&0x0000000000ff0000) >> 16;
+				data[cnt+6] = (tv.tv_sec&0x000000000000ff00) >> 8;
+				data[cnt+7] = (tv.tv_sec&0x00000000000000ff);
+
+				data[cnt+8]  = (tv.tv_usec&0xff00000000000000) >> 56;
+				data[cnt+9]  = (tv.tv_usec&0x00ff000000000000) >> 48;
+				data[cnt+10] = (tv.tv_usec&0x0000ff0000000000) >> 40;
+				data[cnt+11] = (tv.tv_usec&0x000000ff00000000) >> 32;
+				data[cnt+12] = (tv.tv_usec&0x00000000ff000000) >> 24;
+				data[cnt+13] = (tv.tv_usec&0x0000000000ff0000) >> 16;
+				data[cnt+14] = (tv.tv_usec&0x000000000000ff00) >> 8;
+				data[cnt+15] = (tv.tv_usec&0x00000000000000ff);
+
+				data[cnt+16] = buffer[0];
+				data[cnt+17] = buffer[1];
+				data[cnt+18] = buffer[2];
+				data[cnt+19] = buffer[3];
 
 				#else
 				#error Endianness not defined...
 				#endif
 
-				cnt += sizeof(__u32);
+				cnt += HI3593_SAMPLE_SIZE;
 
 			} else {
 				stats->rx_errors++;
@@ -739,6 +823,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 	}
 
 done:
+	kfree(data);
 	mutex_unlock(priv->lock);
 	enable_irq(priv->irq);
 
