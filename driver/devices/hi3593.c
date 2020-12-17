@@ -538,7 +538,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 	struct net_device_stats *stats;
 	struct hi3593_priv *priv;
 	struct sk_buff *skb;
-	struct timeval tv;
+	struct timespec64 tv;
+	u64 tv_usec;
 	__u8 status_cmd, rd_cmd, *data, buffer[4];
 	__u8 pl_cmd[3], pl_rd, pl[3];
 	const __u8 pl_bits[3] = {HI3593_PRIORITY_LABEL1,
@@ -631,7 +632,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 					goto done;
 				}
 
-				do_gettimeofday(&tv);
+				ktime_get_real_ts64(&tv);
+				tv_usec = tv.tv_nsec / NSEC_PER_USEC;
 
 				#if defined(__LITTLE_ENDIAN)
 
@@ -644,14 +646,14 @@ static void hi3593_rx_worker(struct work_struct *work)
 				data[cnt+1] = (tv.tv_sec&0x000000000000ff00) >> 8;
 				data[cnt]   = (tv.tv_sec&0x00000000000000ff);
 
-				data[cnt+15] = (tv.tv_usec&0xff00000000000000) >> 56;
-				data[cnt+14] = (tv.tv_usec&0x00ff000000000000) >> 48;
-				data[cnt+13] = (tv.tv_usec&0x0000ff0000000000) >> 40;
-				data[cnt+12] = (tv.tv_usec&0x000000ff00000000) >> 32;
-				data[cnt+11] = (tv.tv_usec&0x00000000ff000000) >> 24;
-				data[cnt+10] = (tv.tv_usec&0x0000000000ff0000) >> 16;
-				data[cnt+9]  = (tv.tv_usec&0x000000000000ff00) >> 8;
-				data[cnt+8]  = (tv.tv_usec&0x00000000000000ff);
+				data[cnt+15] = (tv_usec&0xff00000000000000) >> 56;
+				data[cnt+14] = (tv_usec&0x00ff000000000000) >> 48;
+				data[cnt+13] = (tv_usec&0x0000ff0000000000) >> 40;
+				data[cnt+12] = (tv_usec&0x000000ff00000000) >> 32;
+				data[cnt+11] = (tv_usec&0x00000000ff000000) >> 24;
+				data[cnt+10] = (tv_usec&0x0000000000ff0000) >> 16;
+				data[cnt+9]  = (tv_usec&0x000000000000ff00) >> 8;
+				data[cnt+8]  = (tv_usec&0x00000000000000ff);
 
 				data[cnt+16] = buffer[3];
 				data[cnt+17] = buffer[2];
@@ -669,14 +671,14 @@ static void hi3593_rx_worker(struct work_struct *work)
 				data[cnt+6] = (tv.tv_sec&0x000000000000ff00) >> 8;
 				data[cnt+7] = (tv.tv_sec&0x00000000000000ff);
 
-				data[cnt+8]  = (tv.tv_usec&0xff00000000000000) >> 56;
-				data[cnt+9]  = (tv.tv_usec&0x00ff000000000000) >> 48;
-				data[cnt+10] = (tv.tv_usec&0x0000ff0000000000) >> 40;
-				data[cnt+11] = (tv.tv_usec&0x000000ff00000000) >> 32;
-				data[cnt+12] = (tv.tv_usec&0x00000000ff000000) >> 24;
-				data[cnt+13] = (tv.tv_usec&0x0000000000ff0000) >> 16;
-				data[cnt+14] = (tv.tv_usec&0x000000000000ff00) >> 8;
-				data[cnt+15] = (tv.tv_usec&0x00000000000000ff);
+				data[cnt+8]  = (tv_usec&0xff00000000000000) >> 56;
+				data[cnt+9]  = (tv_usec&0x00ff000000000000) >> 48;
+				data[cnt+10] = (tv_usec&0x0000ff0000000000) >> 40;
+				data[cnt+11] = (tv_usec&0x000000ff00000000) >> 32;
+				data[cnt+12] = (tv_usec&0x00000000ff000000) >> 24;
+				data[cnt+13] = (tv_usec&0x0000000000ff0000) >> 16;
+				data[cnt+14] = (tv_usec&0x000000000000ff00) >> 8;
+				data[cnt+15] = (tv_usec&0x00000000000000ff);
 
 				data[cnt+16] = buffer[0];
 				data[cnt+17] = buffer[1];
@@ -720,7 +722,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 					buffer[0] &= 0x7f;
 				}
 
-				do_gettimeofday(&tv);
+				ktime_get_real_ts64(&tv);
+				tv_usec = tv.tv_nsec / NSEC_PER_USEC;
 
 				#if defined(__LITTLE_ENDIAN)
 
@@ -733,14 +736,14 @@ static void hi3593_rx_worker(struct work_struct *work)
 				data[cnt+1] = (tv.tv_sec&0x000000000000ff00) >> 8;
 				data[cnt]   = (tv.tv_sec&0x00000000000000ff);
 
-				data[cnt+15] = (tv.tv_usec&0xff00000000000000) >> 56;
-				data[cnt+14] = (tv.tv_usec&0x00ff000000000000) >> 48;
-				data[cnt+13] = (tv.tv_usec&0x0000ff0000000000) >> 40;
-				data[cnt+12] = (tv.tv_usec&0x000000ff00000000) >> 32;
-				data[cnt+11] = (tv.tv_usec&0x00000000ff000000) >> 24;
-				data[cnt+10] = (tv.tv_usec&0x0000000000ff0000) >> 16;
-				data[cnt+9]  = (tv.tv_usec&0x000000000000ff00) >> 8;
-				data[cnt+8]  = (tv.tv_usec&0x00000000000000ff);
+				data[cnt+15] = (tv_usec&0xff00000000000000) >> 56;
+				data[cnt+14] = (tv_usec&0x00ff000000000000) >> 48;
+				data[cnt+13] = (tv_usec&0x0000ff0000000000) >> 40;
+				data[cnt+12] = (tv_usec&0x000000ff00000000) >> 32;
+				data[cnt+11] = (tv_usec&0x00000000ff000000) >> 24;
+				data[cnt+10] = (tv_usec&0x0000000000ff0000) >> 16;
+				data[cnt+9]  = (tv_usec&0x000000000000ff00) >> 8;
+				data[cnt+8]  = (tv_usec&0x00000000000000ff);
 
 				data[cnt+16] = buffer[3];
 				data[cnt+17] = buffer[2];
@@ -758,14 +761,14 @@ static void hi3593_rx_worker(struct work_struct *work)
 				data[cnt+6] = (tv.tv_sec&0x000000000000ff00) >> 8;
 				data[cnt+7] = (tv.tv_sec&0x00000000000000ff);
 
-				data[cnt+8]  = (tv.tv_usec&0xff00000000000000) >> 56;
-				data[cnt+9]  = (tv.tv_usec&0x00ff000000000000) >> 48;
-				data[cnt+10] = (tv.tv_usec&0x0000ff0000000000) >> 40;
-				data[cnt+11] = (tv.tv_usec&0x000000ff00000000) >> 32;
-				data[cnt+12] = (tv.tv_usec&0x00000000ff000000) >> 24;
-				data[cnt+13] = (tv.tv_usec&0x0000000000ff0000) >> 16;
-				data[cnt+14] = (tv.tv_usec&0x000000000000ff00) >> 8;
-				data[cnt+15] = (tv.tv_usec&0x00000000000000ff);
+				data[cnt+8]  = (tv_usec&0xff00000000000000) >> 56;
+				data[cnt+9]  = (tv_usec&0x00ff000000000000) >> 48;
+				data[cnt+10] = (tv_usec&0x0000ff0000000000) >> 40;
+				data[cnt+11] = (tv_usec&0x000000ff00000000) >> 32;
+				data[cnt+12] = (tv_usec&0x00000000ff000000) >> 24;
+				data[cnt+13] = (tv_usec&0x0000000000ff0000) >> 16;
+				data[cnt+14] = (tv_usec&0x000000000000ff00) >> 8;
+				data[cnt+15] = (tv_usec&0x00000000000000ff);
 
 				data[cnt+16] = buffer[0];
 				data[cnt+17] = buffer[1];
