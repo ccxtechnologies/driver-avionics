@@ -84,8 +84,6 @@ static int protocol_raw_recvmsg(struct socket *sock,
 	noblock = flags & MSG_DONTWAIT;
 	flags &= ~MSG_DONTWAIT;
 
-	printk("!!!\n");
-
 	skb = skb_recv_datagram(sk, flags, noblock, &err);
 	if (!skb) {
 		pr_debug("avionics-protocol-raw: No data in receive message\n");
@@ -100,7 +98,6 @@ static int protocol_raw_recvmsg(struct socket *sock,
 
 	num_samples = size / sizeof(avionics_data);
 	buffer_size = num_samples * sizeof(buffer[0]);
-	printk("== %d == %d ==\n", num_samples, buffer_size);
 
 	data = (avionics_data *)skb->data;
 	buffer = kmalloc(buffer_size, GFP_KERNEL);
