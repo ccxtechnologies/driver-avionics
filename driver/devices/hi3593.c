@@ -756,7 +756,9 @@ static void hi3593_tx_worker(struct work_struct *work)
 	struct net_device_stats *stats;
 	struct hi3593_priv *priv;
 	struct sk_buff *skb;
+	avionics_data *data;
 	__u8 rd_cmd, wr_cmd[5], send_cmd;
+	__u32 vbuffer;
 	ssize_t status;
 	int err, i;
 
@@ -787,7 +789,9 @@ static void hi3593_tx_worker(struct work_struct *work)
 
 
 	wr_cmd[0] = HI3593_OPCODE_WR_TX_FIFO;
-	for (i = 0; i < skb->len; i = i + sizeof(__u32)) {
+	data = (avionics_data *)skb->data;
+	printk("=== %d %d ===\n", skb->len, sizeof(data[0]));
+	for (i = 0; i < skb->len/sizeof(data[0]); i++) {
 		status = spi_w8r8(priv->spi, rd_cmd);
 		if (status < 0) {
 			pr_err("avionics-hi3593: Failed to read status\n");
@@ -802,23 +806,11 @@ static void hi3593_tx_worker(struct work_struct *work)
 			return;
 		}
 
-		#if defined(__LITTLE_ENDIAN)
-
-		wr_cmd[1] = skb->data[i+3];
-		wr_cmd[2] = skb->data[i+2];
-		wr_cmd[3] = skb->data[i+1];
-		wr_cmd[4] = skb->data[i];
-
-		#elif defined(__BIG_ENDIAN)
-
-		wr_cmd[1] = skb->data[i];
-		wr_cmd[2] = skb->data[i+1];
-		wr_cmd[3] = skb->data[i+2];
-		wr_cmd[4] = skb->data[i+3];
-
-		#else
-		#error Endianness not defined...
-		#endif
+		vbuffer = cpu_to_be32(data[i].value);
+		wr_cmd[1] = (vbuffer&0x000000ff);
+		wr_cmd[2] = (vbuffer&0x0000ff00) >> 8;
+		wr_cmd[3] = (vbuffer&0x00ff0000) >> 16;
+		wr_cmd[4] = (vbuffer&0xff000000) >> 24;
 
 		err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
 		if (err < 0) {
@@ -862,7 +854,7 @@ static netdev_tx_t hi3593_tx_start_xmit(struct sk_buff *skb,
 		return NETDEV_TX_OK;
 	}
 
-	if (unlikely(skb->len % 4)) {
+	if (unlikely(skb->len % sizeof(avionics_data))) {
 		kfree_skb(skb);
 		stats->tx_dropped++;
 		return NETDEV_TX_OK;

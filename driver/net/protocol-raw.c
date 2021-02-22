@@ -34,7 +34,8 @@ static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 	struct protocol_raw_sock *psk = (struct protocol_raw_sock*)sk;
 	struct sk_buff *skb;
 	struct net_device *dev;
-	int err;
+	avionics_data *data;
+	int err = 0, buffer_size, num_samples, i;
 
 	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
 					msg, size, &dev);
@@ -43,8 +44,10 @@ static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 		return err;
 	}
 
+	num_samples = size/sizeof(data->value);
+	buffer_size = num_samples * sizeof(data[0]);
 	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT,
-				      sk, size);
+				      sk, buffer_size);
 
 	if (!skb) {
 		pr_err("avionics-protocol-raw: Unable to allocate skbuff\n");
@@ -52,19 +55,26 @@ static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 		return -ENOMEM;
 	}
 
-	err = memcpy_from_msg(skb_put(skb, size), msg, size);
+	err = memcpy_from_msg(skb_put(skb, buffer_size), msg, size);
 	if (err < 0) {
-		pr_err("avionics-protocol-raw: Can't memcpy from msg: %d.\n",
-		       err);
+		pr_err("avionics-protocol-raw: Can't memcpy from msg: %d.\n", err);
 		kfree_skb(skb);
 		dev_put(dev);
 		return err;
 	}
 
+	printk("== %d -- %d ==\n", num_samples, buffer_size);
+	data = (avionics_data*)skb->data;
+	for (i = num_samples - 1; i >= 0; i--) {
+		memcpy(&(data[i].value),
+		       &(skb->data[i*sizeof(data->value)]),
+		       sizeof(data->value));
+		data[i].time_msecs = 0;
+	}
+
 	err = protocol_send_to_netdev(dev, skb);
 	if (err) {
-		pr_err("avionics-protocol-raw: Failed to send packet: %d.\n",
-		       err);
+		pr_err("avionics-protocol-raw: Failed to send packet: %d.\n", err);
 		return err;
 	}
 
@@ -78,8 +88,7 @@ static int protocol_raw_recvmsg(struct socket *sock,
 	struct sk_buff *skb;
 	struct avionics_proto_raw_data *buffer;
 	avionics_data *data;
-	int err = 0;
-	int noblock, i, num_samples, buffer_size;
+	int err = 0, noblock, i, num_samples, buffer_size;
 
 	noblock = flags & MSG_DONTWAIT;
 	flags &= ~MSG_DONTWAIT;
