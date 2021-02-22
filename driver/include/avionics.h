@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019, CCX Technologies
+ * Copyright (C) 2019-2021, CCX Technologies
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the version 2 of the GNU General Public License
@@ -53,13 +53,12 @@
 #define AVIONICS_PROTO_TIMESTAMP	2
 
 struct __attribute__((__packed__)) avionics_proto_raw_data {
-	__u32 value;
+	__u32 value;		/* data word, format depends on interface type */
 };
 
 struct __attribute__((__packed__)) avionics_proto_timestamp_data {
-	__s64 time_secs;
-	__s64 time_usecs;
-	__u32 value;
+	__s64 time_msecs;	/* epoch time in milli-seconds */
+	__u32 value;		/* data word, format depends on interface type */
 };
 
 struct sockaddr_avionics {
@@ -69,6 +68,16 @@ struct sockaddr_avionics {
 		/* reserved for future prototcols */
 	} avionics_addr;
 };
+
+#define ARINC429_LABEL(value)		(value & 0x000000ff)
+#define ARINC429_SDI(value)		((value & 0x00000300) >> 8)
+#define ARINC429_DATA(value)		((value & 0x1ffffc00) >> 10)
+#define ARINC429_SSM(value)		((value & 0x60000000) >> 29)
+#define ARINC429_PARITY(value)		((value & 0x80000000) >> 31)
+
+#define ARINC717_WORD(value)		((value & 0x0fff0000) >> 16)
+#define ARINC717_WORD_COUNT(value)	((value & 0x0000fff8) >> 3)
+#define ARINC717_FRAME(value)		(value & 0x00000003)
 
 /* ============= Defintions for Netlink (RNTL) Interface =============== */
 

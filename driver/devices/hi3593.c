@@ -36,8 +36,8 @@ MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.2.0");
 
 #define HI3593_FIFO_DEPTH	32
-#define HI3593_SAMPLE_SIZE	(sizeof(struct avionics_proto_timestamp_data))
-#define HI3593_MTU		(HI3593_FIFO_DEPTH*HI3593_SAMPLE_SIZE*8)
+#define HI3593_SAMPLE_SIZE	(sizeof(avionics_data))
+#define HI3593_MTU		(HI3593_FIFO_DEPTH * HI3593_SAMPLE_SIZE * 8)
 
 #define HI3593_OPCODE_RESET		0x04
 #define HI3593_OPCODE_RD_TX_STATUS	0x80
@@ -539,8 +539,9 @@ static void hi3593_rx_worker(struct work_struct *work)
 	struct hi3593_priv *priv;
 	struct sk_buff *skb;
 	struct timespec64 tv;
-	u64 tv_usec;
-	__u8 status_cmd, rd_cmd, *data, buffer[4];
+	avionics_data *data;
+	__u32 vbuffer;
+	__u8 status_cmd, rd_cmd, buffer[4];
 	__u8 pl_cmd[3], pl_rd, pl[3];
 	const __u8 pl_bits[3] = {HI3593_PRIORITY_LABEL1,
 		HI3593_PRIORITY_LABEL2, HI3593_PRIORITY_LABEL3};
@@ -625,7 +626,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 					buffer[0] &= 0x7f;
 				}
 
-				skb = avionics_device_alloc_skb(dev,HI3593_SAMPLE_SIZE);
+				skb = avionics_device_alloc_skb(dev, HI3593_SAMPLE_SIZE);
 				if (unlikely(!skb)) {
 					pr_err("avionics-lb: Failed to"
 					       " allocate RX buffer\n");
@@ -633,61 +634,11 @@ static void hi3593_rx_worker(struct work_struct *work)
 				}
 
 				ktime_get_real_ts64(&tv);
-				tv_usec = tv.tv_nsec / NSEC_PER_USEC;
-
-				#if defined(__LITTLE_ENDIAN)
-
-				data[cnt+7] = (tv.tv_sec&0xff00000000000000) >> 56;
-				data[cnt+6] = (tv.tv_sec&0x00ff000000000000) >> 48;
-				data[cnt+5] = (tv.tv_sec&0x0000ff0000000000) >> 40;
-				data[cnt+4] = (tv.tv_sec&0x000000ff00000000) >> 32;
-				data[cnt+3] = (tv.tv_sec&0x00000000ff000000) >> 24;
-				data[cnt+2] = (tv.tv_sec&0x0000000000ff0000) >> 16;
-				data[cnt+1] = (tv.tv_sec&0x000000000000ff00) >> 8;
-				data[cnt]   = (tv.tv_sec&0x00000000000000ff);
-
-				data[cnt+15] = (tv_usec&0xff00000000000000) >> 56;
-				data[cnt+14] = (tv_usec&0x00ff000000000000) >> 48;
-				data[cnt+13] = (tv_usec&0x0000ff0000000000) >> 40;
-				data[cnt+12] = (tv_usec&0x000000ff00000000) >> 32;
-				data[cnt+11] = (tv_usec&0x00000000ff000000) >> 24;
-				data[cnt+10] = (tv_usec&0x0000000000ff0000) >> 16;
-				data[cnt+9]  = (tv_usec&0x000000000000ff00) >> 8;
-				data[cnt+8]  = (tv_usec&0x00000000000000ff);
-
-				data[cnt+16] = buffer[3];
-				data[cnt+17] = buffer[2];
-				data[cnt+18] = buffer[1];
-				data[cnt+19] = buffer[0];
-
-				#elif defined(__BIG_ENDIAN)
-
-				data[cnt]   = (tv.tv_sec&0xff00000000000000) >> 56;
-				data[cnt+1] = (tv.tv_sec&0x00ff000000000000) >> 48;
-				data[cnt+2] = (tv.tv_sec&0x0000ff0000000000) >> 40;
-				data[cnt+3] = (tv.tv_sec&0x000000ff00000000) >> 32;
-				data[cnt+4] = (tv.tv_sec&0x00000000ff000000) >> 24;
-				data[cnt+5] = (tv.tv_sec&0x0000000000ff0000) >> 16;
-				data[cnt+6] = (tv.tv_sec&0x000000000000ff00) >> 8;
-				data[cnt+7] = (tv.tv_sec&0x00000000000000ff);
-
-				data[cnt+8]  = (tv_usec&0xff00000000000000) >> 56;
-				data[cnt+9]  = (tv_usec&0x00ff000000000000) >> 48;
-				data[cnt+10] = (tv_usec&0x0000ff0000000000) >> 40;
-				data[cnt+11] = (tv_usec&0x000000ff00000000) >> 32;
-				data[cnt+12] = (tv_usec&0x00000000ff000000) >> 24;
-				data[cnt+13] = (tv_usec&0x0000000000ff0000) >> 16;
-				data[cnt+14] = (tv_usec&0x000000000000ff00) >> 8;
-				data[cnt+15] = (tv_usec&0x00000000000000ff);
-
-				data[cnt+16] = buffer[0];
-				data[cnt+17] = buffer[1];
-				data[cnt+18] = buffer[2];
-				data[cnt+19] = buffer[3];
-
-				#else
-				#error Endianness not defined...
-				#endif
+				data[0].time_msecs = (tv.tv_sec*MSEC_PER_SEC) +
+					(tv.tv_nsec/NSEC_PER_MSEC);
+				vbuffer = buffer[0] + (buffer[1]<<8) +
+					  (buffer[2]<<16) + (buffer[3]<<24);
+				data[0].value = be32_to_cpu(vbuffer);
 
 				skb_copy_to_linear_data(skb, data, HI3593_SAMPLE_SIZE);
 
@@ -723,63 +674,13 @@ static void hi3593_rx_worker(struct work_struct *work)
 				}
 
 				ktime_get_real_ts64(&tv);
-				tv_usec = tv.tv_nsec / NSEC_PER_USEC;
+				data[cnt].time_msecs = (tv.tv_sec*MSEC_PER_SEC) +
+					(tv.tv_nsec/NSEC_PER_MSEC);
+				vbuffer = buffer[0] + (buffer[1]<<8) +
+					  (buffer[2]<<16) + (buffer[3]<<24);
+				data[cnt].value = be32_to_cpu(vbuffer);
 
-				#if defined(__LITTLE_ENDIAN)
-
-				data[cnt+7] = (tv.tv_sec&0xff00000000000000) >> 56;
-				data[cnt+6] = (tv.tv_sec&0x00ff000000000000) >> 48;
-				data[cnt+5] = (tv.tv_sec&0x0000ff0000000000) >> 40;
-				data[cnt+4] = (tv.tv_sec&0x000000ff00000000) >> 32;
-				data[cnt+3] = (tv.tv_sec&0x00000000ff000000) >> 24;
-				data[cnt+2] = (tv.tv_sec&0x0000000000ff0000) >> 16;
-				data[cnt+1] = (tv.tv_sec&0x000000000000ff00) >> 8;
-				data[cnt]   = (tv.tv_sec&0x00000000000000ff);
-
-				data[cnt+15] = (tv_usec&0xff00000000000000) >> 56;
-				data[cnt+14] = (tv_usec&0x00ff000000000000) >> 48;
-				data[cnt+13] = (tv_usec&0x0000ff0000000000) >> 40;
-				data[cnt+12] = (tv_usec&0x000000ff00000000) >> 32;
-				data[cnt+11] = (tv_usec&0x00000000ff000000) >> 24;
-				data[cnt+10] = (tv_usec&0x0000000000ff0000) >> 16;
-				data[cnt+9]  = (tv_usec&0x000000000000ff00) >> 8;
-				data[cnt+8]  = (tv_usec&0x00000000000000ff);
-
-				data[cnt+16] = buffer[3];
-				data[cnt+17] = buffer[2];
-				data[cnt+18] = buffer[1];
-				data[cnt+19] = buffer[0];
-
-				#elif defined(__BIG_ENDIAN)
-
-				data[cnt]   = (tv.tv_sec&0xff00000000000000) >> 56;
-				data[cnt+1] = (tv.tv_sec&0x00ff000000000000) >> 48;
-				data[cnt+2] = (tv.tv_sec&0x0000ff0000000000) >> 40;
-				data[cnt+3] = (tv.tv_sec&0x000000ff00000000) >> 32;
-				data[cnt+4] = (tv.tv_sec&0x00000000ff000000) >> 24;
-				data[cnt+5] = (tv.tv_sec&0x0000000000ff0000) >> 16;
-				data[cnt+6] = (tv.tv_sec&0x000000000000ff00) >> 8;
-				data[cnt+7] = (tv.tv_sec&0x00000000000000ff);
-
-				data[cnt+8]  = (tv_usec&0xff00000000000000) >> 56;
-				data[cnt+9]  = (tv_usec&0x00ff000000000000) >> 48;
-				data[cnt+10] = (tv_usec&0x0000ff0000000000) >> 40;
-				data[cnt+11] = (tv_usec&0x000000ff00000000) >> 32;
-				data[cnt+12] = (tv_usec&0x00000000ff000000) >> 24;
-				data[cnt+13] = (tv_usec&0x0000000000ff0000) >> 16;
-				data[cnt+14] = (tv_usec&0x000000000000ff00) >> 8;
-				data[cnt+15] = (tv_usec&0x00000000000000ff);
-
-				data[cnt+16] = buffer[0];
-				data[cnt+17] = buffer[1];
-				data[cnt+18] = buffer[2];
-				data[cnt+19] = buffer[3];
-
-				#else
-				#error Endianness not defined...
-				#endif
-
-				cnt += HI3593_SAMPLE_SIZE;
+				cnt++;
 
 			} else {
 				stats->rx_errors++;
@@ -809,18 +710,17 @@ static void hi3593_rx_worker(struct work_struct *work)
 		}
 
 		if (cnt) {
-			skb = avionics_device_alloc_skb(dev, cnt);
+			skb = avionics_device_alloc_skb(dev, cnt*HI3593_SAMPLE_SIZE);
 			if (unlikely(!skb)) {
 				pr_err("avionics-lb: Failed to"
 				       " allocate RX buffer\n");
 				goto done;
 			}
 
-			skb_copy_to_linear_data(skb, data, cnt);
+			skb_copy_to_linear_data(skb, data, cnt*HI3593_SAMPLE_SIZE);
 
 			stats->rx_packets++;
 			stats->rx_bytes += skb->len;
-
 			netif_rx_ni(skb);
 		}
 	}

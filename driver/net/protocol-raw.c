@@ -23,6 +23,7 @@
 #include "protocol-raw.h"
 #include "protocol.h"
 #include "avionics.h"
+#include "avionics-device.h"
 
 /* ====== Raw Protocol ===== */
 
@@ -70,20 +71,20 @@ static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 	return size;
 }
 
-#define PROTOCOL_SIZE_FROM_DEVICE (sizeof(struct avionics_proto_timestamp_data))
-
 static int protocol_raw_recvmsg(struct socket *sock,
 				struct msghdr *msg, size_t size, int flags)
 {
 	struct sock *sk = sock->sk;
 	struct sk_buff *skb;
-	__u8 *buffer;
-
+	struct avionics_proto_raw_data *buffer;
+	avionics_data *data;
 	int err = 0;
 	int noblock, i, num_samples, buffer_size;
 
 	noblock = flags & MSG_DONTWAIT;
 	flags &= ~MSG_DONTWAIT;
+
+	printk("!!!\n");
 
 	skb = skb_recv_datagram(sk, flags, noblock, &err);
 	if (!skb) {
@@ -91,25 +92,20 @@ static int protocol_raw_recvmsg(struct socket *sock,
 		return err;
 	}
 
-	num_samples = size/PROTOCOL_SIZE_FROM_DEVICE;
-	buffer_size = num_samples*sizeof(__u32);
-
-	if (buffer_size > skb->len) {
-		num_samples = skb->len/PROTOCOL_SIZE_FROM_DEVICE;
-		buffer_size = num_samples*sizeof(__u32);
-		size = num_samples*PROTOCOL_SIZE_FROM_DEVICE;
-	}
-
-	if (buffer_size < skb->len) {
+	if (size < skb->len) {
 		msg->msg_flags |= MSG_TRUNC;
+	} else {
+		size = skb->len;
 	}
 
+	num_samples = size / sizeof(avionics_data);
+	buffer_size = num_samples * sizeof(buffer[0]);
+	printk("== %d == %d ==\n", num_samples, buffer_size);
+
+	data = (avionics_data *)skb->data;
 	buffer = kmalloc(buffer_size, GFP_KERNEL);
 	for(i = 0; i < num_samples; i++) {
-		buffer[i*4] = skb->data[i*sizeof(struct avionics_proto_timestamp_data)+16];
-		buffer[i*4+1] = skb->data[i*sizeof(struct avionics_proto_timestamp_data)+17];
-		buffer[i*4+2] = skb->data[i*sizeof(struct avionics_proto_timestamp_data)+18];
-		buffer[i*4+3] = skb->data[i*sizeof(struct avionics_proto_timestamp_data)+19];
+		memcpy(&buffer[i], &(data[i].value), sizeof(buffer[0]));
 	}
 
 	err = memcpy_to_msg(msg, buffer, buffer_size);
@@ -131,7 +127,7 @@ static int protocol_raw_recvmsg(struct socket *sock,
 	skb_free_datagram(sk, skb);
 	kfree(buffer);
 
-	return size;
+	return buffer_size;
 }
 
 static const struct proto_ops protocol_raw_ops = {

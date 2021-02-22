@@ -17,6 +17,10 @@
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
 
+#include "avionics.h"
+
+typedef struct avionics_proto_timestamp_data avionics_data;
+
 struct avionics_ops {
 	const char *name;
 
