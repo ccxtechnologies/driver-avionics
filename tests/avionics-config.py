@@ -368,8 +368,7 @@ def get_arinc717rx(device):
 def test_arinc429tx():
     print("==> Testing ARINC-429 TX Config <==")
     set_arinc429tx(
-            "arinc429tx0", AVIONICS_ARINC429TX_FLIP_LABEL_BITS
-            | AVIONICS_ARINC429TX_EVEN_PARITY | AVIONICS_ARINC429TX_PARITY_SET
+            "arinc429tx0", AVIONICS_ARINC429TX_SELF_TEST
     )
     get_arinc429tx("arinc429tx0")
 
@@ -377,37 +376,13 @@ def test_arinc429tx():
 def test_arinc429rx():
     print("==> Testing ARINC-429 RX 0 Config <==")
     set_arinc429rx(
-            "arinc429rx0",
-            AVIONICS_ARINC429RX_PARITY_CHECK
-            | AVIONICS_ARINC429RX_FLIP_LABEL_BITS
-            | AVIONICS_ARINC429RX_EVEN_PARITY,
-            priority_labels=bytes([0x01, 0x80, 0xff]),
-            label_filters=bytes(
-                    [
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
-                    ]
-            )
+            "arinc429rx0", 0
     )
     get_arinc429rx("arinc429rx0")
 
     print("==> Testing ARINC-429 RX 1 Config <==")
     set_arinc429rx(
-            "arinc429rx1",
-            AVIONICS_ARINC429RX_PARITY_CHECK
-            | AVIONICS_ARINC429RX_FLIP_LABEL_BITS
-            | AVIONICS_ARINC429RX_EVEN_PARITY,
-            priority_labels=bytes([0x01, 0x80, 0xff]),
-            label_filters=bytes(
-                    [
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
-                    ]
-            )
+            "arinc429rx1", 0
     )
     get_arinc429rx("arinc429rx1")
 
@@ -428,8 +403,8 @@ def test_arinc717rx():
 
 if __name__ == "__main__":
 
-    # test_arinc429tx()
-    # test_arinc429tx()
+    test_arinc429rx()
+    test_arinc429tx()
 
-    test_arinc717tx()
-    test_arinc717rx()
+    # test_arinc717tx()
+    # test_arinc717rx()

@@ -26,6 +26,50 @@
 
 /* ====== Timestamp Protocol ===== */
 
+static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
+				size_t size)
+{
+	struct sock *sk = sock->sk;
+	struct protocol_raw_sock *psk = (struct protocol_raw_sock*)sk;
+	struct sk_buff *skb;
+	struct net_device *dev;
+	int err;
+
+	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
+					msg, size, &dev);
+	if (err) {
+		pr_err("avionics-protocol-raw: Can't find device: %d.\n", err);
+		return err;
+	}
+
+	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT,
+				      sk, size);
+
+	if (!skb) {
+		pr_err("avionics-protocol-raw: Unable to allocate skbuff\n");
+		dev_put(dev);
+		return -ENOMEM;
+	}
+
+	err = memcpy_from_msg(skb_put(skb, size), msg, size);
+	if (err < 0) {
+		pr_err("avionics-protocol-raw: Can't memcpy from msg: %d.\n",
+		       err);
+		kfree_skb(skb);
+		dev_put(dev);
+		return err;
+	}
+
+	err = protocol_send_to_netdev(dev, skb);
+	if (err) {
+		pr_err("avionics-protocol-raw: Failed to send packet: %d.\n",
+		       err);
+		return err;
+	}
+
+	return size;
+}
+
 static int protocol_timestamp_recvmsg(struct socket *sock,
 				struct msghdr *msg, size_t size, int flags)
 {
@@ -87,6 +131,7 @@ static const struct proto_ops protocol_timestamp_ops = {
 
 	.poll		= datagram_poll,
 
+	.sendmsg	= protocol_timestamp_sendmsg,
 	.recvmsg	= protocol_timestamp_recvmsg,
 
 	.bind		= protocol_bind,

@@ -63,7 +63,6 @@ static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 		return err;
 	}
 
-	printk("== %d -- %d ==\n", num_samples, buffer_size);
 	data = (avionics_data*)skb->data;
 	for (i = num_samples - 1; i >= 0; i--) {
 		memcpy(&(data[i].value),

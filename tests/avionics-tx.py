@@ -14,10 +14,12 @@ import errno
 AF_AVIONICS = 18
 PF_AVIONICS = 18
 AVIONICS_RAW = 1
+AVIONICS_TIMESTAMP = 23
 
 SIOCGIFINDEX = 0x8933
 
 device = sys.argv[1]
+proto = (AVIONICS_TIMESTAMP if ((len(sys.argv) >= 3) and (sys.argv[2] == "timestamp")) else AVIONICS_RAW)
 
 # ARINC-717 Word Format (32 bits)
 # 0000yyyy yyyyyyyy xxxxxxxx xxxxx0zz
@@ -36,8 +38,11 @@ a717_data = (
 #   where y is the word (21 bit)
 #   where z are the SD bits
 #   and y are the label bits (bit order dependant on the flip bits setting)
-a429_data = (
-        (0x01020304).to_bytes(4, 'little')
+a429_data_raw = (
+        (0x01020304).to_bytes(4, 'little') +
+        (0x80000008).to_bytes(4, 'little') +
+        (0xffffffff).to_bytes(4, 'little') +
+        (0x00000000).to_bytes(4, 'little')
         )
 
 def error_code_to_str(code):
@@ -64,7 +69,7 @@ def get_addr(sock, channel):
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 
 # == create socket ==
-with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
+with socket.socket(PF_AVIONICS, socket.SOCK_RAW, proto) as sock:
 
     # == bind to interface ==
     # Python doesn't know about PF_ARINC so directly use libc
@@ -73,7 +78,7 @@ with socket.socket(PF_AVIONICS, socket.SOCK_RAW, AVIONICS_RAW) as sock:
     if err:
         raise OSError(err, "Failed to bind to socket")
 
-    sent = sock.send(a429_data)
+    sent = sock.send(a429_data_raw)
 
     if sent < 0:
         print(f"Send failed {error_code_to_str(-sent)}")
