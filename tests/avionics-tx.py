@@ -1,11 +1,12 @@
 #!/usr/bin/python
-# Copyright: 2018, CCX Technologies
+# Copyright: 2018-2021, CCX Technologies
 
 import socket
 import ctypes
 import ctypes.util
 import struct
 import fcntl
+import time
 
 import sys
 import os
@@ -14,7 +15,7 @@ import errno
 AF_AVIONICS = 18
 PF_AVIONICS = 18
 AVIONICS_RAW = 1
-AVIONICS_TIMESTAMP = 23
+AVIONICS_TIMESTAMP = 2
 
 SIOCGIFINDEX = 0x8933
 
@@ -43,6 +44,18 @@ a429_data_raw = (
         (0x80000008).to_bytes(4, 'little') +
         (0xffffffff).to_bytes(4, 'little') +
         (0x00000000).to_bytes(4, 'little')
+        )
+
+time_msecs = int((time.time()+2)*1000)
+a429_data_timestamp = (
+        (time_msecs).to_bytes(8, 'little') +
+        (0xf1020304).to_bytes(4, 'little') +
+        (time_msecs+100).to_bytes(8, 'little') +
+        (0xf0000008).to_bytes(4, 'little') +
+        (time_msecs+2100).to_bytes(8, 'little') +
+        (0x0fffffff).to_bytes(4, 'little') +
+        (time_msecs+4101).to_bytes(8, 'little') +
+        (0xf0000000).to_bytes(4, 'little')
         )
 
 def error_code_to_str(code):
@@ -78,7 +91,12 @@ with socket.socket(PF_AVIONICS, socket.SOCK_RAW, proto) as sock:
     if err:
         raise OSError(err, "Failed to bind to socket")
 
-    sent = sock.send(a429_data_raw)
+    if proto == AVIONICS_RAW:
+        sent = sock.send(a429_data_raw)
+
+    elif proto == AVIONICS_TIMESTAMP:
+        print(time_msecs)
+        sent = sock.send(a429_data_timestamp)
 
     if sent < 0:
         print(f"Send failed {error_code_to_str(-sent)}")
