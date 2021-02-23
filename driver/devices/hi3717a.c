@@ -1,5 +1,5 @@
 /*
- * Copyright (C), 2019 CCX Technologies
+ * Copyright (C), 2019-2021 CCX Technologies
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -449,7 +449,7 @@ static void hi3717a_tx_worker(struct work_struct *work)
 	__u8 wr_cmd[3];
 	ssize_t status;
 	int err, i, delay, frame_size;
-	__u16 *tx_buffer, buffer;
+	__u16 *tx_buffer, vbuffer;
 
 	priv = container_of((struct delayed_work*)work,
 			    struct hi3717a_priv, worker);
@@ -499,9 +499,9 @@ static void hi3717a_tx_worker(struct work_struct *work)
 				break;
 			}
 
-			buffer = tx_buffer[i];
-			wr_cmd[1] = (buffer&0xff00)>>8;
-			wr_cmd[2] = (buffer&0x00ff);
+			vbuffer = cpu_to_be16(tx_buffer[i]);
+			wr_cmd[1] = (vbuffer&0x00ff);
+			wr_cmd[2] = (vbuffer&0xff00)>>8;
 
 			mutex_lock(priv->lock);
 			err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
@@ -890,7 +890,8 @@ static netdev_tx_t hi3717a_tx_start_xmit(struct sk_buff *skb,
 {
 	struct net_device_stats *stats = &dev->stats;
 	struct hi3717a_priv *priv;
-	__u32 data;
+	avionics_data data;
+	__u32 vbuffer;
 	__u16 frame, word_count, word;
 	int offset, i;
 
@@ -926,12 +927,14 @@ static netdev_tx_t hi3717a_tx_start_xmit(struct sk_buff *skb,
 	 * where x is the word count starting at 1
 	 * and z if the frame starting at 0*/
 
-	for (i = 0; i < skb->len; i = i + sizeof(__u32)) {
-		memcpy(&data, &skb->data[i], sizeof(__u32));
+	for (i = 0; i < skb->len; i = i + sizeof(data)) {
+		/* ARINC-717 doesn't use the transmit timestamp for anything */
 
-		word = (data&0x0fff0000)>>16;
-		word_count = (data&0x0000fff8)>>3;
-		frame = data&0x00000003;
+		memcpy(&data, &skb->data[i], sizeof(data));
+
+		word = (data.value&0x0fff0000)>>16;
+		word_count = (data.value&0x0000fff8)>>3;
+		frame = data.value&0x00000003;
 
 		offset = (frame * priv->tx_buffer_size/4) + (word_count-1);
 

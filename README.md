@@ -35,11 +35,17 @@ data may be buffered internally for some time so the receive time may vary from 
 The timestamp protocol transmits and receives a set of 32-bit words plus a milli-second epoch time counter.
 
 The time counter on all received data will be set to the processor's capture time, this may vary somewhat from the
-time the data was received from the databus but shoud lbe within 3 ms.
+time the data was received from the databus but shoud be within 3 ms.
+
+NOTE: The timestamps will be set when the FIFO on the interface device is read, not when the data is captured
+by the interface device. It is possible that multiple words will have identical timestamps, as they may have been
+read from the device at the same time.
 
 If the time counter on transmit data will be used to delay the data until the epoch time that is set. If the setting
 is less than the current time, or greater than 6 minutes in the future the data will be sent immediatly.
 
+NOTE: Transmit timestamps only make sense on interfaces that are acynchronous like ARINC-429, they will have no
+impact on synchronous systems like ARINC-717.
 
 # Kernel Version
 

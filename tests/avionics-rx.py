@@ -28,70 +28,96 @@ def get_addr(sock, channel):
 
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 
-last_word = 0
-last_count = 0
-last_frame = 0
+if __name__ == "__main__":
+    # == create socket ==
+    with socket.socket(PF_AVIONICS, socket.SOCK_RAW, proto) as sock:
 
+        # == bind to interface ==
+        # Python doesn't know about PF_ARINC so directly use libc
+        addr = get_addr(sock, device)
+        err = libc.bind(sock.fileno(), addr, len(addr))
 
-def print_a717(value):
-    # ARINC-717 Word Format
-    # 0000yyyy yyyyyyyy xxxxxxxx xxxxx0zz
-    #   where y is the word to write (12 bits)
-    #   where x is the word count
-    #   and z if the frame
+        if err:
+            raise OSError(err, "Failed to bind to socket")
 
-    global last_count
-    global last_frame
-    global last_word
+        # == receive data example ==
+        print(f"Receiver started: {datetime.datetime.utcnow()}")
 
-    word = (value & 0x0fff0000) >> 16
-    count = (value & 0x0000fff8) >> 3
-    frame = (value & 0x3)
+        last_word = 0
+        last_count = 0
+        last_frame = 0
 
-    if (count != last_count + 1) and (frame != (last_frame + 1) % 4):
-        print(f"==> 0x{last_word:03X} -- {last_count} -- {last_frame}")
-        print(f"--> 0x{word:03X} -- {count} -- {frame}")
+        while True:
+            recv = sock.recv(4096)
+            print(f"Received: {len(recv)} bytes")
 
-    last_word = word
-    last_count = count
-    last_frame = frame
+            if "arinc429" in device:
+                if proto == AVIONICS_RAW:
+                    data = [
+                            int.from_bytes(recv[i:i + 4], "little")
+                            for i in range(0, len(recv), 4)
+                    ]
 
-    if word:
-        print(f"~~> 0x{word:03X} -- {count} -- {frame}")
+                    for d in data:
+                        print(f"0x{d:08X}")
 
+                elif proto == AVIONICS_TIMESTAMP:
+                    data = [
+                            (int.from_bytes(recv[i:i + 8], "little"),
+                            int.from_bytes(recv[i+8:i + 12], "little"))
+                            for i in range(0, len(recv), 12)
+                    ]
 
-# == create socket ==
-with socket.socket(PF_AVIONICS, socket.SOCK_RAW, proto) as sock:
+                    for ts, d in data:
+                        timestamp = datetime.datetime.fromtimestamp(ts/1000)
+                        print(f"{timestamp.isoformat()}: 0x{d:08X}")
 
-    # == bind to interface ==
-    # Python doesn't know about PF_ARINC so directly use libc
-    addr = get_addr(sock, device)
-    err = libc.bind(sock.fileno(), addr, len(addr))
+            elif "arinc717" in device:
+                if proto == AVIONICS_RAW:
+                    data = [
+                            int.from_bytes(recv[i:i + 4], "little")
+                            for i in range(0, len(recv), 4)
+                    ]
 
-    if err:
-        raise OSError(err, "Failed to bind to socket")
+                    for value in data:
+                        word = (value & 0x0fff0000) >> 16
+                        count = (value & 0x0000fff8) >> 3
+                        frame = (value & 0x3)
+                        print(f"--> 0x{word:03X} -- {count} -- {frame}")
 
-    # == receive data example ==
-    print(f"Receiver started: {datetime.datetime.utcnow()}")
-    while True:
-        recv = sock.recv(4096)
-        print(f"Received: {len(recv)} bytes")
-        if proto == AVIONICS_RAW:
-            data = [
-                    int.from_bytes(recv[i:i + 4], "little")
-                    for i in range(0, len(recv), 4)
-            ]
+                        if (count != last_count + 1) and (frame != (last_frame + 1) % 4):
+                            print(f"==> 0x{last_word:03X} -- {last_count} -- {last_frame}")
+                            print(f"--> 0x{word:03X} -- {count} -- {frame}")
 
-            for d in data:
-                print(f"0x{d:08X}")
+                        last_word = word
+                        last_count = count
+                        last_frame = frame
 
-        elif proto == AVIONICS_TIMESTAMP:
-            data = [
-                    (int.from_bytes(recv[i:i + 8], "little"),
-                    int.from_bytes(recv[i+8:i + 12], "little"))
-                    for i in range(0, len(recv), 12)
-            ]
+                        if word:
+                            print(f"~~> 0x{word:03X} -- {count} -- {frame}")
 
-            for ts, d in data:
-                timestamp = datetime.datetime.fromtimestamp(ts/1000)
-                print(f"{timestamp.isoformat()}: 0x{d:08X}")
+                elif proto == AVIONICS_TIMESTAMP:
+                    data = [
+                            (int.from_bytes(recv[i:i + 8], "little"),
+                            int.from_bytes(recv[i+8:i + 12], "little"))
+                            for i in range(0, len(recv), 12)
+                    ]
+
+                    for ts, value in data:
+                        timestamp = datetime.datetime.fromtimestamp(ts/1000)
+
+                        word = (value & 0x0fff0000) >> 16
+                        count = (value & 0x0000fff8) >> 3
+                        frame = (value & 0x3)
+
+                        if (count != last_count + 1) and (frame != (last_frame + 1) % 4):
+                            print(f"{timestamp}: ==> 0x{last_word:03X} -- {last_count} -- {last_frame}")
+                        elif word:
+                            print(f"{timestamp}: ~~> 0x{word:03X} -- {count} -- {frame}")
+                        else:
+                            print(f"{timestamp}: --> 0x{word:03X} -- {count} -- {frame}")
+
+                        last_word = word
+                        last_count = count
+                        last_frame = frame
+

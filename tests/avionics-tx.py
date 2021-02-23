@@ -27,10 +27,10 @@ proto = (AVIONICS_TIMESTAMP if ((len(sys.argv) >= 3) and (sys.argv[2] == "timest
 #   where y is the word to write (12 bits)
 #   where x is the word count
 #   and z if the frame
-a717_data = (
-    ((1<<16)+(3<<3)+0).to_bytes(4, 'little') +
-    ((2<<16)+(3<<3)+1).to_bytes(4, 'little') +
-    ((3<<16)+(3<<3)+2).to_bytes(4, 'little')
+a717_data_raw = (
+    ((1<<16)+(2<<3)+0).to_bytes(4, 'little') +
+    ((5<<16)+(3<<3)+0).to_bytes(4, 'little') +
+    ((7<<16)+(4<<3)+0).to_bytes(4, 'little')
     )
 
 # ARINC-429 Word Format (32 bits)
@@ -92,7 +92,10 @@ with socket.socket(PF_AVIONICS, socket.SOCK_RAW, proto) as sock:
         raise OSError(err, "Failed to bind to socket")
 
     if proto == AVIONICS_RAW:
-        sent = sock.send(a429_data_raw)
+        if "arinc429" in device:
+            sent = sock.send(a429_data_raw)
+        elif "arinc717" in device:
+            sent = sock.send(a717_data_raw)
 
     elif proto == AVIONICS_TIMESTAMP:
         print(time_msecs)
