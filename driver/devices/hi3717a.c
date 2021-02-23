@@ -1,5 +1,5 @@
 /*
- * Copyright (C), 2019 CCX Technologies
+ * Copyright (C), 2019-2021 CCX Technologies
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -35,8 +35,9 @@ MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.1.0");
 
-#define HI3717A_FIFO_DEPTH		32
-#define HI3717A_MTU	(HI3717A_FIFO_DEPTH*sizeof(__u32))
+#define HI3717A_FIFO_DEPTH	32
+#define HI3717A_SAMPLE_SIZE	(sizeof(avionics_data))
+#define HI3717A_MTU		(HI3717A_FIFO_DEPTH * HI3717A_SAMPLE_SIZE * 8)
 
 #define HI3717A_OPCODE_RD_CTRL0		0xe4
 #define HI3717A_OPCODE_WR_CTRL0		0x64
@@ -448,7 +449,7 @@ static void hi3717a_tx_worker(struct work_struct *work)
 	__u8 wr_cmd[3];
 	ssize_t status;
 	int err, i, delay, frame_size;
-	__u16 *tx_buffer, buffer;
+	__u16 *tx_buffer, vbuffer;
 
 	priv = container_of((struct delayed_work*)work,
 			    struct hi3717a_priv, worker);
@@ -498,9 +499,9 @@ static void hi3717a_tx_worker(struct work_struct *work)
 				break;
 			}
 
-			buffer = tx_buffer[i];
-			wr_cmd[1] = (buffer&0xff00)>>8;
-			wr_cmd[2] = (buffer&0x00ff);
+			vbuffer = cpu_to_be16(tx_buffer[i]);
+			wr_cmd[1] = (vbuffer&0x00ff);
+			wr_cmd[2] = (vbuffer&0xff00)>>8;
 
 			mutex_lock(priv->lock);
 			err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
@@ -664,13 +665,15 @@ static int hi3717a_rxfifo_is_empty(struct hi3717a_priv *priv)
 
 
 static int hi3717a_rxfifo_read(struct hi3717a_priv *priv,
-		__u32 *values, unsigned num_reads)
+		avionics_data *values, unsigned num_reads)
 {
 	int i, status;
 	struct spi_message message;
 	struct spi_transfer *opcodes = priv->opcodes;
 	__u8 rd_cmd[5], buffer[HI3717A_FIFO_DEPTH*5];
 	__u32 vbuffer;
+	__u64 time_msecs;
+	struct timespec64 tv;
 
 	spi_message_init(&message);
 	memset(opcodes, 0, sizeof(*opcodes));
@@ -687,12 +690,15 @@ static int hi3717a_rxfifo_read(struct hi3717a_priv *priv,
 		spi_message_add_tail(&opcodes[i], &message);
 	}
 
+	ktime_get_real_ts64(&tv);
+	time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
 	status = spi_sync(priv->spi, &message);
 
 	for(i = 0; i < num_reads; i++) {
 		vbuffer = buffer[i*5+1] + (buffer[i*5+2]<<8) +
 			(buffer[i*5+3]<<16) + (buffer[i*5+4]<<24);
-		values[i] = be32_to_cpu(vbuffer);
+		values[i].value = be32_to_cpu(vbuffer);
+		values[i].time_msecs = time_msecs;
 	}
 
 	if(status < 0) {
@@ -702,13 +708,16 @@ static int hi3717a_rxfifo_read(struct hi3717a_priv *priv,
 	}
 }
 
-static int hi3717a_rxfifo_read_all(struct hi3717a_priv *priv, __u32 *data)
+static int hi3717a_rxfifo_read_all(struct hi3717a_priv *priv,
+				   avionics_data *data)
 {
 	int count = 0, status;
 	struct spi_message message;
 	struct spi_transfer opcodes[3];
 	__u8 rd_cmd[5], rd_buffer[5], stats_cmd[2], stats_buffer[2][2];
 	__u32 vbuffer;
+	__u64 time_msecs;
+	struct timespec64 tv;
 
 	spi_message_init(&message);
 	memset(opcodes, 0, sizeof(opcodes));
@@ -733,7 +742,10 @@ static int hi3717a_rxfifo_read_all(struct hi3717a_priv *priv, __u32 *data)
 	opcodes[2].rx_buf = stats_buffer[1];
 	spi_message_add_tail(&opcodes[2], &message);
 
+	ktime_get_real_ts64(&tv);
+	time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
 	while(count < HI3717A_FIFO_DEPTH) {
+
 		status = spi_sync(priv->spi, &message);
 		if(status < 0) {
 			return status;
@@ -742,8 +754,8 @@ static int hi3717a_rxfifo_read_all(struct hi3717a_priv *priv, __u32 *data)
 		if(!(stats_buffer[0][1] & HI3717A_RXFIFO_EMPTY)) {
 			vbuffer = rd_buffer[1] + (rd_buffer[2]<<8) +
 				(rd_buffer[3]<<16) + (rd_buffer[4]<<24);
-			data[count] = be32_to_cpu(vbuffer);
-
+			data[count].value = be32_to_cpu(vbuffer);
+			data[count].time_msecs = time_msecs;
 			count++;
 		}
 
@@ -756,8 +768,8 @@ static int hi3717a_rxfifo_read_all(struct hi3717a_priv *priv, __u32 *data)
 	return count;
 }
 
-static int hi3717a_rx_send_upstream(struct hi3717a_priv *priv, __u32 *data,
-				    int count)
+static int hi3717a_rx_send_upstream(struct hi3717a_priv *priv,
+				    avionics_data *data, int count)
 {
 	struct sk_buff *skb;
 	struct net_device *dev;
@@ -766,13 +778,13 @@ static int hi3717a_rx_send_upstream(struct hi3717a_priv *priv, __u32 *data,
 	dev = priv->dev;
 	stats = &dev->stats;
 
-	skb = avionics_device_alloc_skb(dev, count*sizeof(__u32));
+	skb = avionics_device_alloc_skb(dev, count*sizeof(data[0]));
 	if (unlikely(!skb)) {
 		pr_err("avionics-hi3717a: Failed to allocate RX buffer\n");
 		return -ENOMEM;
 	}
 
-	skb_copy_to_linear_data(skb, (void*)data, count*sizeof(__u32));
+	skb_copy_to_linear_data(skb, (void*)data, count*sizeof(data[0]));
 
 	stats->rx_packets++;
 	stats->rx_bytes += skb->len;
@@ -788,7 +800,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 {
 	struct hi3717a_priv *priv;
 	struct net_device *dev;
-	__u32 data[HI3717A_FIFO_DEPTH*3];
+	avionics_data *data;
 	ssize_t status;
 	int count;
 	bool fifo_error = false;
@@ -814,6 +826,12 @@ static void hi3717a_rx_worker(struct work_struct *work)
 		fifo_error = 1;
 	}
 
+	data = kmalloc(HI3717A_MTU, GFP_KERNEL);
+	if (data == NULL) {
+		pr_err("avionics-hi3593: Failed to allocate data buffer\n");
+		return;
+	}
+
 	status = hi3717a_rxfifo_read(priv, data, HI3717A_RX_WORDS_PER);
 	if (unlikely(status < 0)) {
 		pr_err("avionics-hi3717a: Failed to read fifo block\n");
@@ -827,7 +845,6 @@ static void hi3717a_rx_worker(struct work_struct *work)
 		pr_err("avionics-hi3717a: Failed to empty fifo\n");
 		goto done;
 	}
-	mutex_unlock(priv->lock);
 
 	count += status;
 
@@ -840,6 +857,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	}
 
 done:
+	kfree(data);
 	mutex_unlock(priv->lock);
 	enable_irq(priv->irq);
 }
@@ -872,7 +890,8 @@ static netdev_tx_t hi3717a_tx_start_xmit(struct sk_buff *skb,
 {
 	struct net_device_stats *stats = &dev->stats;
 	struct hi3717a_priv *priv;
-	__u32 data;
+	avionics_data data;
+	__u32 vbuffer;
 	__u16 frame, word_count, word;
 	int offset, i;
 
@@ -908,12 +927,14 @@ static netdev_tx_t hi3717a_tx_start_xmit(struct sk_buff *skb,
 	 * where x is the word count starting at 1
 	 * and z if the frame starting at 0*/
 
-	for (i = 0; i < skb->len; i = i + sizeof(__u32)) {
-		memcpy(&data, &skb->data[i], sizeof(__u32));
+	for (i = 0; i < skb->len; i = i + sizeof(data)) {
+		/* ARINC-717 doesn't use the transmit timestamp for anything */
 
-		word = (data&0x0fff0000)>>16;
-		word_count = (data&0x0000fff8)>>3;
-		frame = data&0x00000003;
+		memcpy(&data, &skb->data[i], sizeof(data));
+
+		word = (data.value&0x0fff0000)>>16;
+		word_count = (data.value&0x0000fff8)>>3;
+		frame = data.value&0x00000003;
 
 		offset = (frame * priv->tx_buffer_size/4) + (word_count-1);
 

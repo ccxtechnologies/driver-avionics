@@ -24,6 +24,7 @@
 #include <linux/init.h>
 
 #include "protocol-raw.h"
+#include "protocol-timestamp.h"
 #include "socket-list.h"
 #include "avionics.h"
 #include "device.h"
@@ -59,6 +60,11 @@ static int avionics_sock_create(struct net *net, struct socket *sock,
 	case AVIONICS_PROTO_RAW:
 		popts = protocol_raw_get_ops();
 		p = protocol_raw_get();
+		break;
+
+	case AVIONICS_PROTO_TIMESTAMP:
+		popts = protocol_timestamp_get_ops();
+		p = protocol_timestamp_get();
 		break;
 
 	default:
