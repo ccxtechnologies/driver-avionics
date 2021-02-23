@@ -45,6 +45,3 @@ is less than the current time, or greater than 6 minutes in the future the data 
 
 All development and testing was done on kernel versions 4.9 to 5.6, this driver will probably work on
 different kernels but may require some updates.
-
-
-
