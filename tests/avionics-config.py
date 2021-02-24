@@ -390,7 +390,7 @@ def test_arinc429rx():
 
 def test_arinc717tx():
     print("==> Testing ARINC-717 TX Config <==")
-    set_arinc717tx("arinc717tx0", 0)
+    set_arinc717tx("arinc717tx0", AVIONICS_ARINC717TX_SELF_TEST)
     get_arinc717tx("arinc717tx0")
 
 

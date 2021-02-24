@@ -87,14 +87,14 @@ if __name__ == "__main__":
 
                         if (count != last_count + 1) and (frame != (last_frame + 1) % 4):
                             print(f"==> 0x{last_word:03X} -- {last_count} -- {last_frame}")
+                        elif word:
+                            print(f"~~> 0x{word:03X} -- {count} -- {frame}")
+                        else:
                             print(f"--> 0x{word:03X} -- {count} -- {frame}")
 
                         last_word = word
                         last_count = count
                         last_frame = frame
-
-                        if word:
-                            print(f"~~> 0x{word:03X} -- {count} -- {frame}")
 
                 elif proto == AVIONICS_TIMESTAMP:
                     data = [
