@@ -85,6 +85,8 @@ MODULE_VERSION("1.2.0");
 #define HI3593_FIFO_HALF	0x02
 #define HI3593_FIFO_EMPTY	0x01
 
+#define HI3593_TX_CNTRL_TMODE	(1<<5)
+
 #define HI3593_PRIORITY_LABEL1	0x08
 #define HI3593_PRIORITY_LABEL2	0x10
 #define HI3593_PRIORITY_LABEL3	0x20
@@ -397,7 +399,8 @@ static int hi3593_set_arinc429tx(struct avionics_arinc429tx *config,
 		return -ENODEV;
 	}
 
-	err = hi3593_set_cntrl(priv, config->flags, 0x5c);
+	err = hi3593_set_cntrl(priv, config->flags | HI3593_TX_CNTRL_TMODE,
+			       0x5c | HI3593_TX_CNTRL_TMODE);
 	if (err < 0) {
 		pr_err("avionics-hi3593: Failed to set tx cntrl.\n");
 		return err;
@@ -751,7 +754,7 @@ static void hi3593_tx_worker(struct work_struct *work)
 	__u64 time_msecs, offset_msecs;
 	ssize_t status;
 	struct timespec64 tv;
-	int err, i, transmit_fifo = 0;
+	int err, i;
 
 	priv = container_of((struct delayed_work*)work,
 			    struct hi3593_priv, worker);
@@ -786,9 +789,20 @@ static void hi3593_tx_worker(struct work_struct *work)
 		}
 
 		if (status & HI3593_FIFO_FULL) {
-			kfree_skb(skb);
-			stats->tx_dropped++;
-			return;
+			usleep_range(priv->rx_udelay_min, priv->rx_udelay_max);
+
+			status = spi_w8r8(priv->spi, rd_cmd);
+			if (status < 0) {
+				pr_err("avionics-hi3593: Failed to read status\n");
+				return;
+			}
+
+			if (status & HI3593_FIFO_FULL) {
+				pr_err("avionics-hi3593: TX fifo overflow\n");
+				stats->tx_dropped++;
+				consume_skb(skb);
+				return;
+			}
 		}
 
 		vbuffer = cpu_to_be32(data[i].value);
@@ -810,7 +824,6 @@ static void hi3593_tx_worker(struct work_struct *work)
 				} else if (offset_msecs > 2) {
 					usleep_range((offset_msecs*1000 - 500),
 						     (offset_msecs*1000 + 500));
-					transmit_fifo = 1;
 				}
 			}
 		}
@@ -819,19 +832,6 @@ static void hi3593_tx_worker(struct work_struct *work)
 		if (err < 0) {
 			pr_err("avionics-hi3593: Failed to load fifo\n");
 			return;
-		}
-
-		if (i >= (skb->len/sizeof(data[0]) - 1) ) {
-			transmit_fifo = 1;
-		}
-
-		if (transmit_fifo) {
-			transmit_fifo = 0;
-			send_cmd = HI3593_OPCODE_WR_TX_SEND;
-			err = spi_write(priv->spi, &send_cmd, sizeof(send_cmd));
-			if (err < 0) {
-				pr_err("avionics-hi3593: Failed to send transmit command\n");
-			}
 		}
 	}
 
