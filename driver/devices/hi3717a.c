@@ -812,16 +812,16 @@ static void hi3717a_rx_worker(struct work_struct *work)
 	priv = avionics_device_priv(dev);
 	if (!priv) {
 		pr_err("avionics-hi3717a: Failed to get private data\n");
-		goto done;
+		goto done_irq;
 	}
 
 	mutex_lock(priv->lock);
 	status = hi3717a_rxfifo_is_empty(priv);
 	if (unlikely(status < 0)) {
 		pr_err("avionics-hi3717a: Failed to read status\n");
-		goto done;
+		goto done_mutex;
 	} else if (status == HI3717A_RXFIFO_EMPTY) {
-		goto done;
+		goto done_mutex;
 	} else if (status == HI3717A_RXFIFO_OVF) {
 		fifo_error = 1;
 	}
@@ -858,7 +858,9 @@ static void hi3717a_rx_worker(struct work_struct *work)
 
 done:
 	kfree(data);
+done_mutex:
 	mutex_unlock(priv->lock);
+done_irq:
 	enable_irq(priv->irq);
 }
 
@@ -891,7 +893,6 @@ static netdev_tx_t hi3717a_tx_start_xmit(struct sk_buff *skb,
 	struct net_device_stats *stats = &dev->stats;
 	struct hi3717a_priv *priv;
 	avionics_data data;
-	__u32 vbuffer;
 	__u16 frame, word_count, word;
 	int offset, i;
 

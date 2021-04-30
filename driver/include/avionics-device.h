@@ -48,6 +48,11 @@ struct avionics_ops {
 			      const struct net_device *dev);
 	void (*get_arinc717tx)(struct avionics_arinc717tx *config,
 			       const struct net_device *dev);
+
+	int (*set_mil1553bm)(struct avionics_mil1553bm *config,
+			     const struct net_device *dev);
+	void (*get_mil1553bm)(struct avionics_mil1553bm *config,
+			      const struct net_device *dev);
 };
 
 struct sk_buff* avionics_device_alloc_skb(struct net_device *dev,

@@ -1,3 +1,5 @@
+KBUILD_CFLAGS += -Wno-missing-attributes
+
 ccflags-y 	:= -I$(src)/include
 ccflags-y	+= -D__CHECK_ENDIAN__
 
@@ -15,3 +17,6 @@ avionics-hi3593-y	:= devices/hi3593.o
 
 obj-m		+= avionics-hi3717a.o
 avionics-hi3717a-y	:= devices/hi3717a.o
+
+obj-m		+= avionics-hi6138.o
+avionics-hi6138-y	:= devices/hi6138.o
