@@ -25,6 +25,7 @@
 #include <linux/of_gpio.h>
 #include <linux/of_irq.h>
 #include <linux/interrupt.h>
+#include <linux/time.h>
 
 #include "avionics.h"
 #include "avionics-device.h"
@@ -34,8 +35,9 @@ MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.2.0");
 
-#define HI3593_FIFO_DEPTH		32
-#define HI3593_MTU	(HI3593_FIFO_DEPTH*sizeof(__u32)*6)
+#define HI3593_FIFO_DEPTH	32
+#define HI3593_SAMPLE_SIZE	(sizeof(avionics_data))
+#define HI3593_MTU		(HI3593_FIFO_DEPTH * HI3593_SAMPLE_SIZE * 8)
 
 #define HI3593_OPCODE_RESET		0x04
 #define HI3593_OPCODE_RD_TX_STATUS	0x80
@@ -83,12 +85,18 @@ MODULE_VERSION("1.2.0");
 #define HI3593_FIFO_HALF	0x02
 #define HI3593_FIFO_EMPTY	0x01
 
+#define HI3593_TX_CNTRL_TMODE	(1<<5)
+
 #define HI3593_PRIORITY_LABEL1	0x08
 #define HI3593_PRIORITY_LABEL2	0x10
 #define HI3593_PRIORITY_LABEL3	0x20
 
 #define HI3593_NUM_TX	1
 #define HI3593_NUM_RX	2
+
+#define HI3593_RX_DELAY_MULTIPLIER_MAX	 ((HI3593_FIFO_DEPTH/2+4)*sizeof(__u32)*1000000)
+#define HI3593_RX_DELAY_MULTIPLIER_MIN	 ((HI3593_FIFO_DEPTH/2)*sizeof(__u32)*1000000)
+#define HI3593_RX_HALF_FILL_MULTIPLIER	 ((HI3593_FIFO_DEPTH/2+2)*sizeof(__u32)*HZ)
 
 struct hi3593 {
 	struct net_device *rx[HI3593_NUM_RX];
@@ -115,6 +123,9 @@ struct hi3593_priv {
 	__u8 check_parity;
 	atomic_t *rx_enabled;
 	int rate;
+	unsigned long rx_udelay_min;
+	unsigned long rx_udelay_max;
+	unsigned long rx_wrk_delay;
 };
 
 static ssize_t hi3593_get_cntrl(struct hi3593_priv *priv)
@@ -141,13 +152,10 @@ static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 	__u8 wr_cmd[2];
 	int err;
 
-	mutex_lock(priv->lock);
-
 	status = hi3593_get_cntrl(priv);
 	if (status < 0) {
 		pr_err("avionics-hi3593: Failed to read control: %zd\n",
 		       status);
-		mutex_unlock(priv->lock);
 		return -ENODEV;
 	}
 
@@ -159,7 +167,6 @@ static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 		wr_cmd[0] = HI3593_OPCODE_WR_RX2_CNTRL;
 	} else {
 		pr_err("avionics-hi3593: No valid port index\n");
-		mutex_unlock(priv->lock);
 		return -EINVAL;
 	}
 
@@ -167,7 +174,6 @@ static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 	err = spi_write(priv->spi, wr_cmd, sizeof(wr_cmd));
 	if (err < 0) {
 		pr_err("avionics-hi3593: Failed to set control\n");
-		mutex_unlock(priv->lock);
 		return err;
 	}
 
@@ -175,7 +181,6 @@ static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 	if (status < 0) {
 		pr_err("avionics-hi3593: Failed to read control: %zd\n",
 		       status);
-		mutex_unlock(priv->lock);
 		return -ENODEV;
 	}
 
@@ -183,11 +188,9 @@ static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 		pr_err("avionics-hi3593: Failed to set"
 		       " control to 0x%x & 0x%x : 0x%zx\n",
 		       value, mask, status);
-		mutex_unlock(priv->lock);
 		return -ENODEV;
 	}
 
-	mutex_unlock(priv->lock);
 	return 0;
 }
 
@@ -220,6 +223,9 @@ static int hi3593_set_rate(struct avionics_rate *rate,
 	}
 
 	priv->rate = rate->rate_hz;
+	priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
+	priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
+	priv->rx_wrk_delay = HI3593_RX_HALF_FILL_MULTIPLIER/priv->rate;
 
 	return 0;
 }
@@ -246,6 +252,9 @@ static void hi3593_get_rate(struct avionics_rate *rate,
 	}
 
 	priv->rate = rate->rate_hz;
+	priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
+	priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
+	priv->rx_wrk_delay = HI3593_RX_HALF_FILL_MULTIPLIER/priv->rate;
 }
 
 static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
@@ -390,7 +399,8 @@ static int hi3593_set_arinc429tx(struct avionics_arinc429tx *config,
 		return -ENODEV;
 	}
 
-	err = hi3593_set_cntrl(priv, config->flags, 0x5c);
+	err = hi3593_set_cntrl(priv, config->flags | HI3593_TX_CNTRL_TMODE,
+			       0x5c | HI3593_TX_CNTRL_TMODE);
 	if (err < 0) {
 		pr_err("avionics-hi3593: Failed to set tx cntrl.\n");
 		return err;
@@ -523,7 +533,10 @@ static void hi3593_rx_worker(struct work_struct *work)
 	struct net_device_stats *stats;
 	struct hi3593_priv *priv;
 	struct sk_buff *skb;
-	__u8 status_cmd, rd_cmd, data[HI3593_MTU], buffer[4];
+	struct timespec64 tv;
+	avionics_data *data;
+	__u32 vbuffer;
+	__u8 status_cmd, rd_cmd, buffer[4];
 	__u8 pl_cmd[3], pl_rd, pl[3];
 	const __u8 pl_bits[3] = {HI3593_PRIORITY_LABEL1,
 		HI3593_PRIORITY_LABEL2, HI3593_PRIORITY_LABEL3};
@@ -560,7 +573,11 @@ static void hi3593_rx_worker(struct work_struct *work)
 		return;
 	}
 
-	mutex_lock(priv->lock);
+	data = kmalloc(HI3593_MTU, GFP_KERNEL);
+	if (data == NULL) {
+		pr_err("avionics-hi3593: Failed to allocate data buffer\n");
+		return;
+	}
 
 	status = spi_w8r8(priv->spi, status_cmd);
 	if (status < 0) {
@@ -602,34 +619,22 @@ static void hi3593_rx_worker(struct work_struct *work)
 					buffer[0] &= 0x7f;
 				}
 
-				skb = avionics_device_alloc_skb(dev,
-								sizeof(__u32));
+				skb = avionics_device_alloc_skb(dev, HI3593_SAMPLE_SIZE);
 				if (unlikely(!skb)) {
 					pr_err("avionics-lb: Failed to"
 					       " allocate RX buffer\n");
 					goto done;
 				}
 
-				#if defined(__LITTLE_ENDIAN)
+				ktime_get_real_ts64(&tv);
+				data[0].time_msecs = (tv.tv_sec*MSEC_PER_SEC) +
+					(tv.tv_nsec/NSEC_PER_MSEC);
+				vbuffer = buffer[0] + (buffer[1]<<8) +
+					  (buffer[2]<<16) + (buffer[3]<<24);
+				data[0].value = be32_to_cpu(vbuffer);
 
-				data[0] = buffer[3];
-				data[1] = buffer[2];
-				data[2] = buffer[1];
-				data[3] = buffer[0];
+				skb_copy_to_linear_data(skb, data, HI3593_SAMPLE_SIZE);
 
-				#elif defined(__BIG_ENDIAN)
-
-				data[0] = buffer[0];
-				data[1] = buffer[1];
-				data[2] = buffer[2];
-				data[3] = buffer[3];
-
-				#else
-				#error Endianness not defined...
-				#endif
-
-				skb_copy_to_linear_data(skb, data,
-							sizeof(__u32));
 				stats->rx_packets++;
 				stats->rx_bytes += skb->len;
 				netif_rx_ni(skb);
@@ -642,7 +647,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 
 	cnt = 0;
 	if (!(status & HI3593_FIFO_EMPTY)) {
-		for (i = 0; i < HI3593_MTU; i += sizeof(__u32)) {
+		for (i = 0; i < HI3593_MTU; i += HI3593_SAMPLE_SIZE) {
 
 			err = spi_write_then_read(priv->spi, &rd_cmd,
 						  sizeof(rd_cmd),
@@ -661,25 +666,14 @@ static void hi3593_rx_worker(struct work_struct *work)
 					buffer[0] &= 0x7f;
 				}
 
-				#if defined(__LITTLE_ENDIAN)
+				ktime_get_real_ts64(&tv);
+				data[cnt].time_msecs = (tv.tv_sec*MSEC_PER_SEC) +
+					(tv.tv_nsec/NSEC_PER_MSEC);
+				vbuffer = buffer[0] + (buffer[1]<<8) +
+					  (buffer[2]<<16) + (buffer[3]<<24);
+				data[cnt].value = be32_to_cpu(vbuffer);
 
-				data[cnt] = buffer[3];
-				data[cnt+1] = buffer[2];
-				data[cnt+2] = buffer[1];
-				data[cnt+3] = buffer[0];
-
-				#elif defined(__BIG_ENDIAN)
-
-				data[cnt] = buffer[0];
-				data[cnt+1] = buffer[1];
-				data[cnt+2] = buffer[2];
-				data[cnt+3] = buffer[3];
-
-				#else
-				#error Endianness not defined...
-				#endif
-
-				cnt += sizeof(__u32);
+				cnt++;
 
 			} else {
 				stats->rx_errors++;
@@ -694,7 +688,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 			}
 
 			if(status & HI3593_FIFO_EMPTY) {
-				udelay(64000000/priv->rate);
+				usleep_range(priv->rx_udelay_min,
+					     priv->rx_udelay_max);
 				status = spi_w8r8(priv->spi, status_cmd);
 				if (unlikely(status < 0)) {
 					pr_err("avionics-hi3593: Failed to"
@@ -708,24 +703,23 @@ static void hi3593_rx_worker(struct work_struct *work)
 		}
 
 		if (cnt) {
-			skb = avionics_device_alloc_skb(dev, cnt);
+			skb = avionics_device_alloc_skb(dev, cnt*HI3593_SAMPLE_SIZE);
 			if (unlikely(!skb)) {
 				pr_err("avionics-lb: Failed to"
 				       " allocate RX buffer\n");
 				goto done;
 			}
 
-			skb_copy_to_linear_data(skb, data, cnt);
+			skb_copy_to_linear_data(skb, data, cnt*HI3593_SAMPLE_SIZE);
 
 			stats->rx_packets++;
 			stats->rx_bytes += skb->len;
-
 			netif_rx_ni(skb);
 		}
 	}
 
 done:
-	mutex_unlock(priv->lock);
+	kfree(data);
 	enable_irq(priv->irq);
 
 }
@@ -742,8 +736,7 @@ static irqreturn_t hi3593_rx_irq(int irq, void *data)
 	disable_irq_nosync(priv->irq);
 
 	if (atomic_read(priv->rx_enabled)) {
-		queue_delayed_work(priv->wq, &priv->worker,
-				   ((HI3593_FIFO_DEPTH/2)*sizeof(__u32)*8*HZ)/priv->rate);
+		queue_delayed_work(priv->wq, &priv->worker, priv->rx_wrk_delay);
 	}
 
 	return IRQ_HANDLED;
@@ -755,8 +748,12 @@ static void hi3593_tx_worker(struct work_struct *work)
 	struct net_device_stats *stats;
 	struct hi3593_priv *priv;
 	struct sk_buff *skb;
+	avionics_data *data;
 	__u8 rd_cmd, wr_cmd[5], send_cmd;
+	__u32 vbuffer;
+	__u64 time_msecs, offset_msecs;
 	ssize_t status;
+	struct timespec64 tv;
 	int err, i;
 
 	priv = container_of((struct delayed_work*)work,
@@ -782,60 +779,61 @@ static void hi3593_tx_worker(struct work_struct *work)
 		return;
 	}
 
-	mutex_lock(priv->lock);
-
-
 	wr_cmd[0] = HI3593_OPCODE_WR_TX_FIFO;
-	for (i = 0; i < skb->len; i = i + sizeof(__u32)) {
+	data = (avionics_data *)skb->data;
+	for (i = 0; i < skb->len/sizeof(data[0]); i++) {
 		status = spi_w8r8(priv->spi, rd_cmd);
 		if (status < 0) {
 			pr_err("avionics-hi3593: Failed to read status\n");
-			mutex_unlock(priv->lock);
 			return;
 		}
 
 		if (status & HI3593_FIFO_FULL) {
-			kfree_skb(skb);
-			stats->tx_dropped++;
-			mutex_unlock(priv->lock);
-			return;
+			usleep_range(priv->rx_udelay_min, priv->rx_udelay_max);
+
+			status = spi_w8r8(priv->spi, rd_cmd);
+			if (status < 0) {
+				pr_err("avionics-hi3593: Failed to read status\n");
+				return;
+			}
+
+			if (status & HI3593_FIFO_FULL) {
+				pr_err("avionics-hi3593: TX fifo overflow\n");
+				stats->tx_dropped++;
+				consume_skb(skb);
+				return;
+			}
 		}
 
-		#if defined(__LITTLE_ENDIAN)
+		vbuffer = cpu_to_be32(data[i].value);
+		wr_cmd[1] = (vbuffer&0x000000ff);
+		wr_cmd[2] = (vbuffer&0x0000ff00) >> 8;
+		wr_cmd[3] = (vbuffer&0x00ff0000) >> 16;
+		wr_cmd[4] = (vbuffer&0xff000000) >> 24;
 
-		wr_cmd[1] = skb->data[i+3];
-		wr_cmd[2] = skb->data[i+2];
-		wr_cmd[3] = skb->data[i+1];
-		wr_cmd[4] = skb->data[i];
-
-		#elif defined(__BIG_ENDIAN)
-
-		wr_cmd[1] = skb->data[i];
-		wr_cmd[2] = skb->data[i+1];
-		wr_cmd[3] = skb->data[i+2];
-		wr_cmd[4] = skb->data[i+3];
-
-		#else
-		#error Endianness not defined...
-		#endif
+		if (data[i].time_msecs) {
+			ktime_get_real_ts64(&tv);
+			time_msecs = (tv.tv_sec*MSEC_PER_SEC) +
+				(tv.tv_nsec/NSEC_PER_MSEC);
+			if (time_msecs < data[i].time_msecs) {
+				offset_msecs = data[i].time_msecs - time_msecs;
+				if (offset_msecs > 360000) {
+					pr_err("avionics-hi3593-tx: Offset %llu"
+					       " too large, ignoring\n",
+					       offset_msecs) ;
+				} else if (offset_msecs > 2) {
+					usleep_range((offset_msecs*1000 - 500),
+						     (offset_msecs*1000 + 500));
+				}
+			}
+		}
 
 		err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
 		if (err < 0) {
 			pr_err("avionics-hi3593: Failed to load fifo\n");
-			mutex_unlock(priv->lock);
 			return;
 		}
 	}
-
-	send_cmd = HI3593_OPCODE_WR_TX_SEND;
-	err = spi_write(priv->spi, &send_cmd, sizeof(send_cmd));
-	if (err < 0) {
-		pr_err("avionics-hi3593: Failed to send transmit command\n");
-		mutex_unlock(priv->lock);
-		return;
-	}
-
-	mutex_unlock(priv->lock);
 
 	stats->tx_packets++;
 	stats->tx_bytes += skb->len;
@@ -861,7 +859,7 @@ static netdev_tx_t hi3593_tx_start_xmit(struct sk_buff *skb,
 		return NETDEV_TX_OK;
 	}
 
-	if (unlikely(skb->len % 4)) {
+	if (unlikely(skb->len % sizeof(avionics_data))) {
 		kfree_skb(skb);
 		stats->tx_dropped++;
 		return NETDEV_TX_OK;
@@ -1093,6 +1091,9 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		skb_queue_head_init(&priv->skbq);
 		priv->wq = hi3593->wq;
 		priv->rate = 12500;
+		priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
+		priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
+		priv->rx_wrk_delay = HI3593_RX_HALF_FILL_MULTIPLIER/priv->rate;
 
 		INIT_DELAYED_WORK(&priv->worker, hi3593_tx_worker);
 
@@ -1140,6 +1141,9 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		skb_queue_head_init(&priv->skbq);
 		priv->wq = hi3593->wq;
 		priv->rate = 12500;
+		priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
+		priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
+		priv->rx_wrk_delay = HI3593_RX_HALF_FILL_MULTIPLIER/priv->rate;
 
 		INIT_DELAYED_WORK(&priv->worker, hi3593_rx_worker);
 

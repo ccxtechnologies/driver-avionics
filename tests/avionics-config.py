@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright: 2019, CCX Technologies
+# Copyright: 2019-2021, CCX Technologies
 
 import socket
 import struct
@@ -11,6 +11,7 @@ import os
 AF_AVIONICS = 18
 PF_AVIONICS = 18
 AVIONICS_RAW = 1
+AVIONICS_TIMESTAMP = 2
 
 SIOCGIFINDEX = 0x8933
 
@@ -368,8 +369,7 @@ def get_arinc717rx(device):
 def test_arinc429tx():
     print("==> Testing ARINC-429 TX Config <==")
     set_arinc429tx(
-            "arinc429tx0", AVIONICS_ARINC429TX_FLIP_LABEL_BITS
-            | AVIONICS_ARINC429TX_EVEN_PARITY | AVIONICS_ARINC429TX_PARITY_SET
+            "arinc429tx0", 0
     )
     get_arinc429tx("arinc429tx0")
 
@@ -377,37 +377,13 @@ def test_arinc429tx():
 def test_arinc429rx():
     print("==> Testing ARINC-429 RX 0 Config <==")
     set_arinc429rx(
-            "arinc429rx0",
-            AVIONICS_ARINC429RX_PARITY_CHECK
-            | AVIONICS_ARINC429RX_FLIP_LABEL_BITS
-            | AVIONICS_ARINC429RX_EVEN_PARITY,
-            priority_labels=bytes([0x01, 0x80, 0xff]),
-            label_filters=bytes(
-                    [
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
-                    ]
-            )
+            "arinc429rx0", 0
     )
     get_arinc429rx("arinc429rx0")
 
     print("==> Testing ARINC-429 RX 1 Config <==")
     set_arinc429rx(
-            "arinc429rx1",
-            AVIONICS_ARINC429RX_PARITY_CHECK
-            | AVIONICS_ARINC429RX_FLIP_LABEL_BITS
-            | AVIONICS_ARINC429RX_EVEN_PARITY,
-            priority_labels=bytes([0x01, 0x80, 0xff]),
-            label_filters=bytes(
-                    [
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
-                    ]
-            )
+            "arinc429rx1", 0
     )
     get_arinc429rx("arinc429rx1")
 
@@ -420,16 +396,17 @@ def test_arinc717tx():
 
 def test_arinc717rx():
     print("==> Testing ARINC-717 RX Config <==")
-    #set_arinc717rx("arinc717rx0", AVIONICS_ARINC717RX_NOSYNC)
-    #set_arinc717rx("arinc717rx0", AVIONICS_ARINC717RX_SFTSYNC)
-    set_arinc717rx("arinc717rx0", 0)
+    set_arinc717rx("arinc717rx0", AVIONICS_ARINC717RX_BPRZ)
     get_arinc717rx("arinc717rx0")
+    # AVIONICS_ARINC717RX_BPRZ = (1 << 0)
+    # AVIONICS_ARINC717RX_NOSYNC = (1 << 1)
+    # AVIONICS_ARINC717RX_SFTSYNC = (1 << 2)
 
 
 if __name__ == "__main__":
 
-    # test_arinc429tx()
-    # test_arinc429tx()
+    #test_arinc429rx()
+    #test_arinc429tx()
 
     test_arinc717tx()
     test_arinc717rx()

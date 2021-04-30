@@ -20,22 +20,20 @@
 #include <linux/skbuff.h>
 #include <net/sock.h>
 
-#include "protocol-raw.h"
+#include "protocol-timestamp.h"
 #include "protocol.h"
 #include "avionics.h"
-#include "avionics-device.h"
 
-/* ====== Raw Protocol ===== */
+/* ====== Timestamp Protocol ===== */
 
-static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
+static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
 				size_t size)
 {
 	struct sock *sk = sock->sk;
 	struct protocol_raw_sock *psk = (struct protocol_raw_sock*)sk;
 	struct sk_buff *skb;
 	struct net_device *dev;
-	avionics_data *data;
-	int err = 0, buffer_size, num_samples, i;
+	int err;
 
 	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
 					msg, size, &dev);
@@ -44,10 +42,8 @@ static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 		return err;
 	}
 
-	num_samples = size/sizeof(data->value);
-	buffer_size = num_samples * sizeof(data[0]);
 	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT,
-				      sk, buffer_size);
+				      sk, size);
 
 	if (!skb) {
 		pr_err("avionics-protocol-raw: Unable to allocate skbuff\n");
@@ -55,46 +51,39 @@ static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 		return -ENOMEM;
 	}
 
-	err = memcpy_from_msg(skb_put(skb, buffer_size), msg, size);
+	err = memcpy_from_msg(skb_put(skb, size), msg, size);
 	if (err < 0) {
-		pr_err("avionics-protocol-raw: Can't memcpy from msg: %d.\n", err);
+		pr_err("avionics-protocol-raw: Can't memcpy from msg: %d.\n",
+		       err);
 		kfree_skb(skb);
 		dev_put(dev);
 		return err;
 	}
 
-	data = (avionics_data*)skb->data;
-	for (i = num_samples - 1; i >= 0; i--) {
-		memcpy(&(data[i].value),
-		       &(skb->data[i*sizeof(data->value)]),
-		       sizeof(data->value));
-		data[i].time_msecs = 0;
-	}
-
 	err = protocol_send_to_netdev(dev, skb);
 	if (err) {
-		pr_err("avionics-protocol-raw: Failed to send packet: %d.\n", err);
+		pr_err("avionics-protocol-raw: Failed to send packet: %d.\n",
+		       err);
 		return err;
 	}
 
 	return size;
 }
 
-static int protocol_raw_recvmsg(struct socket *sock,
+static int protocol_timestamp_recvmsg(struct socket *sock,
 				struct msghdr *msg, size_t size, int flags)
 {
 	struct sock *sk = sock->sk;
 	struct sk_buff *skb;
-	struct avionics_proto_raw_data *buffer;
-	avionics_data *data;
-	int err = 0, noblock, i, num_samples, buffer_size;
+	int err = 0;
+	int noblock;
 
 	noblock = flags & MSG_DONTWAIT;
 	flags &= ~MSG_DONTWAIT;
 
 	skb = skb_recv_datagram(sk, flags, noblock, &err);
 	if (!skb) {
-		pr_debug("avionics-protocol-raw: No data in receive message\n");
+		pr_debug("avionics-protocol-timestamp: No data in receive message\n");
 		return err;
 	}
 
@@ -104,20 +93,10 @@ static int protocol_raw_recvmsg(struct socket *sock,
 		size = skb->len;
 	}
 
-	num_samples = size / sizeof(avionics_data);
-	buffer_size = num_samples * sizeof(buffer[0]);
-
-	data = (avionics_data *)skb->data;
-	buffer = kmalloc(buffer_size, GFP_KERNEL);
-	for(i = 0; i < num_samples; i++) {
-		memcpy(&buffer[i], &(data[i].value), sizeof(buffer[0]));
-	}
-
-	err = memcpy_to_msg(msg, buffer, buffer_size);
+	err = memcpy_to_msg(msg, skb->data, size);
 	if (err < 0) {
-		pr_err("avionics-protocol-raw: Failed to copy message data.\n");
+		pr_err("avionics-protocol-timestamp: Failed to copy message data.\n");
 		skb_free_datagram(sk, skb);
-		kfree(buffer);
 		return err;
 	}
 
@@ -130,12 +109,11 @@ static int protocol_raw_recvmsg(struct socket *sock,
 	}
 
 	skb_free_datagram(sk, skb);
-	kfree(buffer);
 
-	return buffer_size;
+	return size;
 }
 
-static const struct proto_ops protocol_raw_ops = {
+static const struct proto_ops protocol_timestamp_ops = {
 	.owner		= THIS_MODULE,
 	.family		= PF_AVIONICS,
 
@@ -153,8 +131,8 @@ static const struct proto_ops protocol_raw_ops = {
 
 	.poll		= datagram_poll,
 
-	.sendmsg	= protocol_raw_sendmsg,
-	.recvmsg	= protocol_raw_recvmsg,
+	.sendmsg	= protocol_timestamp_sendmsg,
+	.recvmsg	= protocol_timestamp_recvmsg,
 
 	.bind		= protocol_bind,
 	.release	= protocol_release,
@@ -162,36 +140,36 @@ static const struct proto_ops protocol_raw_ops = {
 	.ioctl		= protocol_ioctl,
 };
 
-static struct proto protocol_raw = {
-	.name		= "AVIONICS_RAW",
+static struct proto protocol_timestamp = {
+	.name		= "AVIONICS_TIMESTAMP",
 	.owner		= THIS_MODULE,
 	.obj_size	= sizeof(struct protocol_sock),
 };
 
-const struct proto_ops* protocol_raw_get_ops(void)
+const struct proto_ops* protocol_timestamp_get_ops(void)
 {
-	return &protocol_raw_ops;
+	return &protocol_timestamp_ops;
 }
 
-struct proto * protocol_raw_get(void)
+struct proto * protocol_timestamp_get(void)
 {
-	return &protocol_raw;
+	return &protocol_timestamp;
 }
 
-int protocol_raw_register(void)
+int protocol_timestamp_register(void)
 {
 	int err;
 
-	err = proto_register(&protocol_raw, AVIONICS_PROTO_RAW);
+	err = proto_register(&protocol_timestamp, AVIONICS_PROTO_TIMESTAMP);
 	if (err) {
-		pr_err("avionics-protocol-raw: Failed to register"
-		       " Raw Protocol: %d\n", err);
+		pr_err("avionics-protocol-timestamp: Failed to register"
+		       " Timestamp Protocol: %d\n", err);
 		return err;
 	}
 	return 0;
 }
 
-void protocol_raw_unregister(void)
+void protocol_timestamp_unregister(void)
 {
-	proto_unregister(&protocol_raw);
+	proto_unregister(&protocol_timestamp);
 }
