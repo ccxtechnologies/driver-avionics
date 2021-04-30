@@ -749,7 +749,7 @@ static void hi3593_tx_worker(struct work_struct *work)
 	struct hi3593_priv *priv;
 	struct sk_buff *skb;
 	avionics_data *data;
-	__u8 rd_cmd, wr_cmd[5], send_cmd;
+	__u8 rd_cmd, wr_cmd[5];
 	__u32 vbuffer;
 	__u64 time_msecs, offset_msecs;
 	ssize_t status;

@@ -1,3 +1,5 @@
+KBUILD_CFLAGS += -Wno-missing-attributes
+
 ccflags-y 	:= -I$(src)/include
 ccflags-y	+= -D__CHECK_ENDIAN__
 
