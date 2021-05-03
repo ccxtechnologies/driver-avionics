@@ -71,6 +71,7 @@ MODULE_VERSION("1.0.0");
 #define HI6138_REG_SMTIRQ_SMTMERR	(1<<4)
 #define HI6138_REG_SMTIRQ_SMTEON	(1<<3)
 
+#define HI6138_REG_SMTSTART		0x002F
 #define HI6138_REG_SMTNEXT		0x0030
 #define HI6138_REG_SMTLAST		0x0031
 #define HI6138_REG_SMTCNT		0x003a
@@ -79,6 +80,7 @@ MODULE_VERSION("1.0.0");
 #define HI6138_REG_SMTCFG_MTTO_LONG	(3<<14)
 #define HI6138_REG_SMTCFG_MTSRR_ANY	(3<<5)
 #define HI6138_REG_SMTCFG_MTCRIW	(1<<4)
+#define HI6138_REG_SMTCFG_MTSRR		(3<<5)
 
 #define HI6138_REG_MEMPTRA		0x000b
 #define HI6138_REG_MEMPTRB		0x000c
@@ -98,9 +100,6 @@ MODULE_VERSION("1.0.0");
 
 #define HI6138_OPCODE_READ_MEMPTR	0x40
 #define HI6138_OPCODE_WRITE_MEMPTR	0xc0
-
-#define HI6138_REG_ACCESS_PTR		HI6138_REG_MEMPTRA
-#define HI6138_OPCODE_REG_ACCESS_PTR	HI6138_OPCODE_ENABLE_MEMPTRA
 
 struct hi6138 {
 	struct net_device *bm;
@@ -161,15 +160,47 @@ static int hi6138_set_fastaccess(struct spi_device *spi, __u8 address, __u16 val
 	return 0;
 }
 
-static int hi6138_get_reg(struct spi_device *spi, __u16 address, __u16 *value)
+static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
+			  int length)
 {
-	int err;
-	__u16 buffer;
-	__u8 cmd = HI6138_OPCODE_REG_ACCESS_PTR;
+	int err, i;
+	__u16 vbuffer;
+	__u8 buffer[1 + sizeof(__u16)*length];
 
-	err = hi6138_set_fastaccess(spi, HI6138_REG_ACCESS_PTR, address);
+	err = hi6138_set_fastaccess(spi, HI6138_REG_MEMPTRA, address);
 	if (err < 0) {
-		pr_err("avionics-hi6138: Failed to set reg address 0x%x\n",
+		pr_err("avionics-hi6138: Failed to set memory pointer to 0x%x\n",
+		       address);
+		return err;
+	}
+
+	buffer[0] = HI6138_OPCODE_ENABLE_MEMPTRA;
+	for(i = 0; i < length; i++) {
+		vbuffer = cpu_to_be16(value[i]);
+		memcpy(&buffer[1+i*sizeof(vbuffer)], &vbuffer, sizeof(vbuffer));
+	}
+
+	err = spi_write(spi, buffer, sizeof(buffer));
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to write to memory at 0x%x\n",
+		       address);
+		return err;
+	}
+
+	return 0;
+}
+
+static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
+			  int length)
+{
+	int err, i;
+	__u16 vbuffer;
+	__u8 buffer[sizeof(__u16)*length];
+	__u8 cmd = HI6138_OPCODE_ENABLE_MEMPTRA;
+
+	err = hi6138_set_fastaccess(spi, HI6138_REG_MEMPTRA, address);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to set memory pointer to 0x%x\n",
 		       address);
 		return err;
 	}
@@ -177,14 +208,27 @@ static int hi6138_get_reg(struct spi_device *spi, __u16 address, __u16 *value)
 	err = spi_write_then_read(spi, &cmd, sizeof(cmd),
 				  &buffer, sizeof(buffer));
 	if (err < 0) {
-		pr_err("avionics-hi6138: Failed to read reg 0x%x\n",
+		pr_err("avionics-hi6138: Failed to read from memory at 0x%x\n",
 		       address);
 		return err;
 	}
 
-	*value = be16_to_cpu(buffer);
+	for(i = 0; i < length; i++) {
+		memcpy(&vbuffer, &buffer[i*sizeof(vbuffer)], sizeof(vbuffer));
+		value[i] = be16_to_cpu(vbuffer);
+	}
 
 	return 0;
+}
+
+static int hi6138_get_reg(struct spi_device *spi, __u16 address, __u16 *value)
+{
+	return hi6138_get_mem(spi, address, value, 1);
+}
+
+static int hi6138_set_reg(struct spi_device *spi, __u16 address, __u16 *value)
+{
+	return hi6138_set_mem(spi, address, value, 1);
 }
 
 static void hi6138_get_mil1553bm(struct avionics_mil1553bm *config,
@@ -268,9 +312,10 @@ static int hi6138_bm_open(struct net_device *dev)
 		return err;
 	}
 
-	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_SMTCFG, 0x0801
+	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_SMTCFG, 0x0803
 				    | HI6138_REG_SMTCFG_MTTO_LONG
-				    | HI6138_REG_SMTCFG_MTCRIW);
+				    | HI6138_REG_SMTCFG_MTCRIW |
+				    HI6138_REG_SMTCFG_MTSRR);
 	if (err < 0) {
 		pr_err("avionics-hi6138-bm: Failed set SMT config register\n");
 		return err;
@@ -352,6 +397,15 @@ static int hi6138_irq_bm(struct net_device *dev)
 	pr_info("avionics-hi6138-bm: smt irq pending 0x%x\n", smtirq_status);
 
 	if (smtirq_status & HI6138_REG_SMTIRQ_SMTEON) {
+		err = hi6138_get_reg(priv->spi, HI6138_REG_SMTSTART, &addr);
+		if (err < 0) {
+			pr_err("avionics-hi6138-bm: Failed read"
+			       " start address register XXXX\n");
+			return err;
+		}
+
+		pr_info("avionics-hi6138-bm: start address 0x%x\n", addr);
+
 		err = hi6138_get_reg(priv->spi, HI6138_REG_SMTLAST, &addr);
 		if (err < 0) {
 			pr_err("avionics-hi6138-bm: Failed read"
@@ -524,6 +578,34 @@ static int hi6138_get_config(struct spi_device *spi)
 	return 0;
 }
 
+static int hi6138_init_smt_mem(struct spi_device *spi)
+{
+	const __u16 base_addr = 0x0080;
+	__u16 smt_addr_list[] = {
+		/********** Command Stack Addresses ************
+		 * Start    * Current    * End     * Interupt */
+		 0x0600 ,   0x0600 ,      0x0aff,   0x0adf,
+
+		/********** Data Stack Addresses ************
+		 * Start    * Current    * End     * Interupt */
+	         0x0b00,    0x0b00,      0x1fff,   0x18ff };
+	int err;
+
+	err = hi6138_set_fastaccess(spi, HI6138_REG_SMTSTART, base_addr);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set SMT start address\n");
+		return err;
+	}
+
+	err = hi6138_set_mem(spi, base_addr, smt_addr_list, sizeof(smt_addr_list));
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set configure SMT memory\n");
+		return err;
+	}
+
+	return 0;
+}
+
 static int hi6138_reset(struct spi_device *spi)
 {
 	struct hi6138 *hi6138 = spi_get_drvdata(spi);
@@ -595,6 +677,13 @@ static int hi6138_reset(struct spi_device *spi)
 	}
 
 	pr_info("avionics-hi6138: device reset\n");
+
+	err = hi6138_init_smt_mem(spi);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to initialize SMT memory\n");
+		return err;
+	}
+
 	return 0;
 }
 
