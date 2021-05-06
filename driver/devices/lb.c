@@ -87,11 +87,6 @@ static int lb_change_mtu(struct net_device *dev, int mtu)
 		return -EBUSY;
 	}
 
-	if (mtu % sizeof(__u32)) {
-		pr_err("avionics-lb: MTU must be a multiple of 4 bytes.\n");
-		return -EINVAL;
-	}
-
 	pr_info("avionics-lb: Setting up device %s MTU to %d\n", dev->name, mtu);
 
 	dev->mtu = mtu;
