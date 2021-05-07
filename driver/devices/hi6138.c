@@ -475,6 +475,9 @@ static int hi6138_irq_bm(struct net_device *dev)
 				}
 			}
 
+			/* TODO: Convert to a format similar to A717, with an
+			 * offset counter to packatize the data */
+
 			skb_copy_to_linear_data(skb, buffer, length);
 
 			stats->rx_packets++;
