@@ -968,8 +968,17 @@ static int hi3593_reset(struct spi_device *spi)
 		}
 
 	} else {
+		err = gpio_direction_output(hi3593->reset_gpio, 1);
+		if (err < 0) {
+			pr_err("avionics-hi3593: Failed to set gpio reset\n");
+			return err;
+		}
 		usleep_range(100, 150);
-		gpio_set_value(hi3593->reset_gpio, 0);
+		err = gpio_direction_output(hi3593->reset_gpio, 0);
+		if (err < 0) {
+			pr_err("avionics-hi3593: Failed to clear gpio reset\n");
+			return err;
+		}
 	}
 
 	/* Default to high-impdance driver */
@@ -1217,7 +1226,9 @@ static int hi3593_remove(struct spi_device *spi)
 	}
 
 	if (hi3593->reset_gpio > 0) {
-		gpio_set_value(hi3593->reset_gpio, 1);
+		if (gpio_direction_output(hi3593->reset_gpio, 1) < 0) {
+			pr_err("avionics-hi3593: Failed to set gpio reset\n");
+		}
 		gpio_free(hi3593->reset_gpio);
 		hi3593->reset_gpio = 0;
 	}
