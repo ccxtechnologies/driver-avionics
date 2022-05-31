@@ -956,7 +956,7 @@ static int hi3593_reset(struct spi_device *spi)
 	int err;
 
 	if (hi3593->reset_gpio <= 0 ) {
-		pr_err("avionics-hi3593: Reset GPIO Reset missing/malformed,"
+		pr_warn("avionics-hi3593: Reset GPIO Reset missing/malformed,"
 		       " will use reset command.\n");
 		hi3593->reset_gpio = 0;
 		opcode = HI3593_OPCODE_RESET;
