@@ -105,6 +105,7 @@ struct hi3593 {
 	int reset_gpio;
 	int irq[2];
 	__u32 aclk;
+	bool inverted_irqs;
 	struct mutex lock;
 	atomic_t rx_enabled[2];
 };
@@ -945,6 +946,8 @@ static int hi3593_get_config(struct spi_device *spi)
 		}
 	}
 
+	hi3593->inverted_irqs = of_property_read_bool(dev->of_node, "inverted-irqs");
+
 	return 0;
 }
 
@@ -1067,6 +1070,14 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 	struct hi3593 *hi3593 = spi_get_drvdata(spi);
 	struct hi3593_priv *priv;
 	int i, err;
+	unsigned long irq_flags;
+
+	if (hi3593->inverted_irqs) {
+		pr_info("Expecting IRQs to be inverted in hardware\n");
+		irq_flags = IRQF_TRIGGER_FALLING | IRQF_ONESHOT;
+	} else {
+		irq_flags = IRQF_TRIGGER_RISING | IRQF_ONESHOT;
+	}
 
 	hi3593->wq = alloc_workqueue("hi3593", WQ_HIGHPRI, 0);
 	if (!hi3593->wq) {
@@ -1157,8 +1168,7 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		INIT_DELAYED_WORK(&priv->worker, hi3593_rx_worker);
 
 		err = request_irq(hi3593->irq[i], hi3593_rx_irq,
-				  IRQF_TRIGGER_RISING | IRQF_ONESHOT,
-				  hi3593->rx[i]->name, priv);
+				  irq_flags, hi3593->rx[i]->name, priv);
 		if (err) {
 			pr_err("avionics-hi3593: Failed to register"
 			       " RX %d irq %d\n", i, hi3593->irq[i]);
