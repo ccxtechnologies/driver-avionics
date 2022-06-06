@@ -98,6 +98,8 @@ MODULE_VERSION("1.2.0");
 #define HI3593_RX_DELAY_MULTIPLIER_MIN	 ((HI3593_FIFO_DEPTH/2)*sizeof(__u32)*1000000)
 #define HI3593_RX_HALF_FILL_MULTIPLIER	 ((HI3593_FIFO_DEPTH/2+2)*sizeof(__u32)*HZ)
 
+#define HI3593_MAX_SPI_BUFSIZE	16
+
 struct hi3593 {
 	struct net_device *rx[HI3593_NUM_RX];
 	struct net_device *tx[HI3593_NUM_TX];
@@ -127,6 +129,10 @@ struct hi3593_priv {
 	unsigned long rx_udelay_min;
 	unsigned long rx_udelay_max;
 	unsigned long rx_wrk_delay;
+
+	/* rx worker spi transfers, used to optimize spi transfers */
+	__u8 rx_spi_rx_buffer[HI3593_MAX_SPI_BUFSIZE];
+	__u8 rx_spi_tx_buffer[HI3593_MAX_SPI_BUFSIZE];
 };
 
 static ssize_t hi3593_get_cntrl(struct hi3593_priv *priv)
@@ -528,6 +534,40 @@ static int hi3593_rx_stop(struct net_device *dev)
 	return 0;
 }
 
+int hi3593_rx_worker_spi_write_then_read(
+			struct hi3593_priv *priv,
+			const void *txbuf, unsigned n_tx,
+			void *rxbuf, unsigned n_rx)
+{
+	int status;
+	struct spi_message	message;
+	struct spi_transfer	transfer;
+
+	if ((n_rx + n_tx) > HI3593_MAX_SPI_BUFSIZE) {
+		pr_err("avionics-hi3593: message size too long\n");
+		return -1;
+	}
+
+	spi_message_init(&message);
+	memset(&transfer, 0, sizeof(transfer));
+
+	transfer.len = n_tx + n_rx;
+	spi_message_add_tail(&transfer, &message);
+
+	memcpy(priv->rx_spi_tx_buffer, txbuf, n_tx);
+	transfer.tx_buf = priv->rx_spi_tx_buffer;
+	transfer.rx_buf = priv->rx_spi_rx_buffer;
+
+	status = spi_sync(priv->spi, &message);
+	if (status < 0) {
+		pr_err("avionics-hi3593: spi transfer failed\n");
+	} else {
+		memcpy(rxbuf, transfer.rx_buf+n_tx, n_rx);
+	}
+
+	return status;
+}
+
 static void hi3593_rx_worker(struct work_struct *work)
 {
 	struct net_device *dev;
@@ -580,8 +620,9 @@ static void hi3593_rx_worker(struct work_struct *work)
 		return;
 	}
 
-	status = spi_w8r8(priv->spi, status_cmd);
-	if (status < 0) {
+	err = hi3593_rx_worker_spi_write_then_read(priv,
+					&status_cmd, sizeof(status_cmd), &status, sizeof(status));
+	if (err < 0) {
 		pr_err("avionics-hi3593: Failed to read status\n");
 		goto done;
 	}
@@ -592,7 +633,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 	}
 
 	if (status & (pl_bits[0] | pl_bits[1] | pl_bits[2])) {
-		err = spi_write_then_read(priv->spi, &pl_rd, sizeof(pl_rd),
+		err = hi3593_rx_worker_spi_write_then_read(priv, &pl_rd, sizeof(pl_rd),
 					  pl, sizeof(pl));
 		if (unlikely(err)) {
 			pr_err("avionics-hi3593: Failed to"
@@ -604,7 +645,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 	for (i = 0; i < 3; i++) {
 		if (status & pl_bits[i]) {
 			buffer[3] = pl[2-i];
-			err = spi_write_then_read(priv->spi, &pl_cmd[i],
+			err = hi3593_rx_worker_spi_write_then_read(priv, &pl_cmd[i],
 						  sizeof(pl_cmd[0]), buffer,
 						  sizeof(buffer) - 1);
 			if (unlikely(err)) {
@@ -650,10 +691,9 @@ static void hi3593_rx_worker(struct work_struct *work)
 	if (!(status & HI3593_FIFO_EMPTY)) {
 		for (i = 0; i < HI3593_MTU; i += HI3593_SAMPLE_SIZE) {
 
-			err = spi_write_then_read(priv->spi, &rd_cmd,
-						  sizeof(rd_cmd),
-						  buffer,
-						  sizeof(buffer));
+			err = hi3593_rx_worker_spi_write_then_read(priv,
+						  &rd_cmd, sizeof(rd_cmd),
+						  buffer, sizeof(buffer));
 			if (unlikely(err)) {
 				pr_err("avionics-hi3593: Failed to"
 				       " read from fifo\n");
@@ -681,8 +721,9 @@ static void hi3593_rx_worker(struct work_struct *work)
 				stats->rx_crc_errors++;
 			}
 
-			status = spi_w8r8(priv->spi, status_cmd);
-			if (unlikely(status < 0)) {
+			err = hi3593_rx_worker_spi_write_then_read(priv,
+					&status_cmd, sizeof(status_cmd), &status, sizeof(status));
+			if (unlikely(err < 0)) {
 				pr_err("avionics-hi3593: Failed to"
 				       " read status\n");
 				goto done;
@@ -691,8 +732,9 @@ static void hi3593_rx_worker(struct work_struct *work)
 			if(status & HI3593_FIFO_EMPTY) {
 				usleep_range(priv->rx_udelay_min,
 					     priv->rx_udelay_max);
-				status = spi_w8r8(priv->spi, status_cmd);
-				if (unlikely(status < 0)) {
+				err = hi3593_rx_worker_spi_write_then_read(priv,
+					&status_cmd, sizeof(status_cmd), &status, sizeof(status));
+				if (unlikely(err < 0)) {
 					pr_err("avionics-hi3593: Failed to"
 					       " read status\n");
 					goto done;
