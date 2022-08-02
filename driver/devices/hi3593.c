@@ -26,6 +26,7 @@
 #include <linux/of_irq.h>
 #include <linux/interrupt.h>
 #include <linux/time.h>
+#include <linux/version.h>
 
 #include "avionics.h"
 #include "avionics-device.h"
@@ -679,7 +680,11 @@ static void hi3593_rx_worker(struct work_struct *work)
 
 				stats->rx_packets++;
 				stats->rx_bytes += skb->len;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
 				netif_rx_ni(skb);
+#else
+				netif_rx(skb);
+#endif
 			} else {
 				stats->rx_errors++;
 				stats->rx_crc_errors++;
@@ -757,7 +762,11 @@ static void hi3593_rx_worker(struct work_struct *work)
 
 			stats->rx_packets++;
 			stats->rx_bytes += skb->len;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
 			netif_rx_ni(skb);
+#else
+			netif_rx(skb);
+#endif
 		}
 	}
 
@@ -1239,7 +1248,11 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
 static int hi3593_remove(struct spi_device *spi)
+#else
+static void hi3593_remove(struct spi_device *spi)
+#endif
 {
 	struct hi3593 *hi3593 = spi_get_drvdata(spi);
 	struct hi3593_priv *priv;
@@ -1291,7 +1304,9 @@ static int hi3593_remove(struct spi_device *spi)
 		destroy_workqueue(hi3593->wq);
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
 	return 0;
+#endif
 }
 
 static int hi3593_probe(struct spi_device *spi)

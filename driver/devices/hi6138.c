@@ -25,6 +25,7 @@
 #include <linux/of_gpio.h>
 #include <linux/of_irq.h>
 #include <linux/interrupt.h>
+#include <linux/version.h>
 
 #include "avionics.h"
 #include "avionics-device.h"
@@ -482,7 +483,11 @@ static int hi6138_irq_bm(struct net_device *dev)
 
 			stats->rx_packets++;
 			stats->rx_bytes += skb->len;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
 			netif_rx_ni(skb);
+#else
+			netif_rx(skb);
+#endif
 		}
 
 	}
@@ -795,7 +800,11 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
 static int hi6138_remove(struct spi_device *spi)
+#else
+static void hi6138_remove(struct spi_device *spi)
+#endif
 {
 	struct hi6138 *hi6138 = spi_get_drvdata(spi);
 	struct hi6138_priv *priv;
@@ -830,7 +839,9 @@ static int hi6138_remove(struct spi_device *spi)
 		destroy_workqueue(hi6138->wq);
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
 	return 0;
+#endif
 }
 
 static int hi6138_probe(struct spi_device *spi)

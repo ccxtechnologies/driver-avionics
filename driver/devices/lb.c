@@ -49,7 +49,11 @@ static void lb_rx(struct sk_buff *skb_xmit, struct net_device *dev)
 	stats->rx_packets++;
 	stats->rx_bytes += skb->len;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
 	netif_rx_ni(skb);
+#else
+	netif_rx(skb);
+#endif
 }
 
 static netdev_tx_t lb_start_xmit(struct sk_buff *skb,
@@ -107,7 +111,7 @@ static void lb_rtnl_link_setup(struct net_device *dev)
 	dev->tx_queue_len	= 0;
 	dev->flags		= IFF_NOARP;
 	dev->netdev_ops		= &lb_net_device_ops;
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,11,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,11,0)
 	dev->destructor		= free_netdev;
 #else
 	dev->needs_free_netdev	= true;

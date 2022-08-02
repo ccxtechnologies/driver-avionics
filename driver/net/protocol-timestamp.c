@@ -76,12 +76,15 @@ static int protocol_timestamp_recvmsg(struct socket *sock,
 	struct sock *sk = sock->sk;
 	struct sk_buff *skb;
 	int err = 0;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,8)
 	int noblock;
 
 	noblock = flags & MSG_DONTWAIT;
 	flags &= ~MSG_DONTWAIT;
-
 	skb = skb_recv_datagram(sk, flags, noblock, &err);
+#else
+	skb = skb_recv_datagram(sk, flags, &err);
+#endif
 	if (!skb) {
 		pr_debug("avionics-protocol-timestamp: No data in receive message\n");
 		return err;

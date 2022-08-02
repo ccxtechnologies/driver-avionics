@@ -26,6 +26,7 @@
 #include <linux/of_irq.h>
 #include <linux/atomic.h>
 #include <linux/interrupt.h>
+#include <linux/version.h>
 
 #include "avionics.h"
 #include "avionics-device.h"
@@ -789,7 +790,11 @@ static int hi3717a_rx_send_upstream(struct hi3717a_priv *priv,
 	stats->rx_packets++;
 	stats->rx_bytes += skb->len;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
 	netif_rx_ni(skb);
+#else
+	netif_rx(skb);
+#endif
 
 	return 0;
 }
@@ -1158,7 +1163,11 @@ static int hi3717a_create_netdevs(struct spi_device *spi)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
 static int hi3717a_remove(struct spi_device *spi)
+#else
+static void hi3717a_remove(struct spi_device *spi)
+#endif
 {
 	struct hi3717a *hi3717a = spi_get_drvdata(spi);
 	struct hi3717a_priv *priv;
@@ -1206,7 +1215,9 @@ static int hi3717a_remove(struct spi_device *spi)
 		destroy_workqueue(hi3717a->wq);
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
 	return 0;
+#endif
 }
 
 static int hi3717a_probe(struct spi_device *spi)

@@ -87,12 +87,16 @@ static int protocol_raw_recvmsg(struct socket *sock,
 	struct sk_buff *skb;
 	struct avionics_proto_raw_data *buffer;
 	avionics_data *data;
-	int err = 0, noblock, i, num_samples, buffer_size;
+	int err = 0, i, num_samples, buffer_size;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,8)
+	int noblock;
 
 	noblock = flags & MSG_DONTWAIT;
 	flags &= ~MSG_DONTWAIT;
-
 	skb = skb_recv_datagram(sk, flags, noblock, &err);
+#else
+	skb = skb_recv_datagram(sk, flags, &err);
+#endif
 	if (!skb) {
 		pr_debug("avionics-protocol-raw: No data in receive message\n");
 		return err;
