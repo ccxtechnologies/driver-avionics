@@ -103,7 +103,11 @@ static int protocol_timestamp_recvmsg(struct socket *sock,
 		return err;
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,19,0)
 	sock_recv_ts_and_drops(msg, sk, skb);
+#else
+	sock_recv_cmsgs(msg, sk, skb);
+#endif
 
 	if (msg->msg_name) {
 		__sockaddr_check_size(sizeof(struct sockaddr_avionics));
