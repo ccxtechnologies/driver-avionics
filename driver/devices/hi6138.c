@@ -176,7 +176,7 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 {
 	int err, i;
 	__u16 vbuffer;
-	__u8 buffer[1 + sizeof(vbuffer)*length];
+	__u8 *buffer;
 
 	err = hi6138_set_fastaccess(spi, HI6138_REG_MEMPTRA, address);
 	if (err < 0) {
@@ -184,6 +184,12 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 		       address);
 		return err;
 	}
+
+    buffer = kmalloc(1 + sizeof(vbuffer)*length, GFP_KERNEL);
+    if (buffer == NULL) {
+		pr_err("avionics-hi6138: Failed to allocate memory\n");
+        return -ENOMEM;
+    }
 
 	buffer[0] = HI6138_OPCODE_WRITE_MEMPTR;
 	for(i = 0; i < length; i++) {
@@ -195,9 +201,11 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to write to memory at 0x%x\n",
 		       address);
+         kvfree(buffer);
 		return err;
 	}
 
+    kvfree(buffer);
 	return 0;
 }
 
@@ -206,7 +214,7 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
 {
 	int err, i;
 	__u16 vbuffer;
-	__u8 buffer[sizeof(vbuffer)*length];
+	__u8 *buffer;
 	__u8 cmd = HI6138_OPCODE_READ_MEMPTR;
 
 	err = hi6138_set_fastaccess(spi, HI6138_REG_MEMPTRA, address);
@@ -216,11 +224,18 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
 		return err;
 	}
 
+    buffer = kmalloc(sizeof(vbuffer)*length, GFP_KERNEL);
+    if (buffer == NULL) {
+		pr_err("avionics-hi6138: Failed to allocate memory\n");
+        return -ENOMEM;
+    }
+
 	err = spi_write_then_read(spi, &cmd, sizeof(cmd),
 				  &buffer, sizeof(buffer));
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to read from memory at 0x%x\n",
 		       address);
+        kvfree(buffer);
 		return err;
 	}
 
@@ -229,6 +244,7 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
 		value[i] = be16_to_cpu(vbuffer);
 	}
 
+    kvfree(buffer);
 	return 0;
 }
 
@@ -497,8 +513,6 @@ static int hi6138_irq_bm(struct net_device *dev)
 
 static void hi6138_irq_worker(struct work_struct *work)
 {
-	struct net_device *dev;
-	struct net_device_stats *stats;
 	struct hi6138 *hi6138;
 	__u16 hirq_status;
 	int err;
@@ -664,6 +678,13 @@ static int hi6138_reset(struct spi_device *spi)
 	__u16 mcfg2;
 	__u8 dev_id, rev_id;
 	int err;
+
+    pr_info("avionics-hi6138: Reseting Device\n");
+
+    if (hi6138->reset_gpio <= 0) {
+        pr_err("avionics-hi6138: no reset gpio configured 2\n");
+        return -1;
+    }
 
 	gpio_set_value(hi6138->reset_gpio, 0);
 	usleep_range(1000, 1500);
