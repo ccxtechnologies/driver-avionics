@@ -231,7 +231,7 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
     }
 
 	err = spi_write_then_read(spi, &cmd, sizeof(cmd),
-				  &buffer, sizeof(buffer));
+				  buffer, sizeof(buffer));
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to read from memory at 0x%x\n",
 		       address);
@@ -682,13 +682,22 @@ static int hi6138_reset(struct spi_device *spi)
     pr_info("avionics-hi6138: Reseting Device\n");
 
     if (hi6138->reset_gpio <= 0) {
-        pr_err("avionics-hi6138: no reset gpio configured 2\n");
+        pr_err("avionics-hi6138: no reset gpio configured\n");
         return -1;
     }
 
-	gpio_set_value(hi6138->reset_gpio, 0);
+    err = gpio_direction_output(hi6138->reset_gpio, 1);
+    if (err < 0) {
+        pr_err("avionics-hi6138: Failed to set gpio reset\n");
+        return err;
+    }
 	usleep_range(1000, 1500);
-	gpio_set_value(hi6138->reset_gpio, 1);
+
+    err = gpio_direction_output(hi6138->reset_gpio, 0);
+    if (err < 0) {
+        pr_err("avionics-hi6138: Failed to clear gpio reset\n");
+        return err;
+    }
 	usleep_range(1000, 1500);
 
 	err = hi6138_get_reg(spi, HI6138_REG_MCFG2, &mcfg2);
@@ -846,10 +855,14 @@ static void hi6138_remove(struct spi_device *spi)
 		free_irq(hi6138->irq, hi6138);
 	}
 
-	cancel_work_sync(&hi6138->worker);
+    if (hi6138->wq) {
+	    cancel_work_sync(&hi6138->worker);
+    }
 
 	if (hi6138->reset_gpio > 0) {
-		gpio_set_value(hi6138->reset_gpio, 1);
+		if (gpio_direction_output(hi6138->reset_gpio, 1) < 0) {
+			pr_err("avionics-hi6138: Failed to set gpio reset\n");
+		}
 		gpio_free(hi6138->reset_gpio);
 		hi6138->reset_gpio = 0;
 	}
