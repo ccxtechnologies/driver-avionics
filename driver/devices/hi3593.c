@@ -34,7 +34,7 @@
 MODULE_DESCRIPTION("HOLT Hi-3593 ARINC-429 Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
-MODULE_VERSION("1.2.0");
+MODULE_VERSION("1.2.1");
 
 #define HI3593_FIFO_DEPTH	32
 #define HI3593_SAMPLE_SIZE	(sizeof(avionics_data))
@@ -44,6 +44,9 @@ MODULE_VERSION("1.2.0");
 #define HI3593_OPCODE_RD_TX_STATUS	0x80
 #define HI3593_OPCODE_RD_ALCK		0xd4
 #define HI3593_OPCODE_WR_ALCK		0x38
+
+#define HI3593_OPCODE_RD_IRQ		0xd0
+#define HI3593_OPCODE_WR_IRQ		0x34
 
 #define HI3593_OPCODE_RD_RX1_CNTRL	0x94
 #define HI3593_OPCODE_RD_RX2_CNTRL	0xB4
@@ -494,6 +497,8 @@ static int hi3593_tx_stop(struct net_device *dev)
 	return 0;
 }
 
+static void hi3593_empty_fifo(struct hi3593_priv *priv);
+
 static int hi3593_rx_open(struct net_device *dev)
 {
 	struct hi3593_priv *priv;
@@ -504,13 +509,22 @@ static int hi3593_rx_open(struct net_device *dev)
 		return -EINVAL;
 	}
 
+	pr_warn("avionics-hi3593: Enabling Receiver\n");
+
 	if (atomic_read(priv->rx_enabled)) {
 		pr_err("avionics-hi3593: Receiver already running\n");
 		return 0;
 	}
 
+
 	atomic_set(priv->rx_enabled, 1);
+
+	mutex_lock(priv->lock);
+
 	enable_irq(priv->irq);
+	hi3593_empty_fifo(priv);
+
+	mutex_unlock(priv->lock);
 
 	return 0;
 }
@@ -519,18 +533,21 @@ static int hi3593_rx_stop(struct net_device *dev)
 {
 	struct hi3593_priv *priv;
 
-	pr_warn("avionics-hi3593: Disabling Receiver\n");
-
-	netif_stop_queue(dev);
-
 	priv = avionics_device_priv(dev);
 	if (!priv) {
 		pr_err("avionics-hi3593: Failed to get private data\n");
 		return -EINVAL;
 	}
 
+	pr_warn("avionics-hi3593: Disabling Receiver\n");
+
+	if (!atomic_read(priv->rx_enabled)) {
+		return 0;
+	}
+
+	netif_stop_queue(dev);
+
 	atomic_set(priv->rx_enabled, 0);
-	disable_irq(priv->irq);
 
 	return 0;
 }
@@ -567,6 +584,106 @@ int hi3593_rx_worker_spi_write_then_read(
 	}
 
 	return status;
+}
+
+static void hi3593_empty_fifo(struct hi3593_priv *priv)
+{
+	avionics_data *data;
+	__u8 status_cmd, rd_cmd, buffer[4];
+	__u8 pl_cmd[3], pl_rd, pl[3];
+	const __u8 pl_bits[3] = {HI3593_PRIORITY_LABEL1,
+		HI3593_PRIORITY_LABEL2, HI3593_PRIORITY_LABEL3};
+	ssize_t status;
+	int err, i;
+
+	if (priv->rx_index == 0) {
+		rd_cmd = HI3593_OPCODE_RD_RX1_FIFO;
+		status_cmd = HI3593_OPCODE_RD_RX1_STATUS;
+		pl_cmd[0] = HI3593_OPCODE_RD_RX1_PL1;
+		pl_cmd[1] = HI3593_OPCODE_RD_RX1_PL2;
+		pl_cmd[2] = HI3593_OPCODE_RD_RX1_PL3;
+		pl_rd = HI3593_OPCODE_RD_RX1_PRIORITY;
+	} else if (priv->rx_index == 1) {
+		rd_cmd = HI3593_OPCODE_RD_RX2_FIFO;
+		status_cmd = HI3593_OPCODE_RD_RX2_STATUS;
+		pl_cmd[0] = HI3593_OPCODE_RD_RX2_PL1;
+		pl_cmd[1] = HI3593_OPCODE_RD_RX2_PL2;
+		pl_cmd[2] = HI3593_OPCODE_RD_RX2_PL3;
+		pl_rd = HI3593_OPCODE_RD_RX2_PRIORITY;
+	} else {
+		pr_err("avionics-hi3593: No valid port index\n");
+		return;
+	}
+
+	data = kmalloc(HI3593_MTU, GFP_KERNEL);
+	if (data == NULL) {
+		pr_err("avionics-hi3593: Failed to allocate data buffer\n");
+		return;
+	}
+
+	err = hi3593_rx_worker_spi_write_then_read(priv,
+					&status_cmd, sizeof(status_cmd), &status, sizeof(status));
+	if (err < 0) {
+		pr_err("avionics-hi3593: Failed to read status\n");
+		goto done;
+	}
+
+	if (status & (pl_bits[0] | pl_bits[1] | pl_bits[2])) {
+		err = hi3593_rx_worker_spi_write_then_read(priv, &pl_rd, sizeof(pl_rd),
+					  pl, sizeof(pl));
+		if (unlikely(err)) {
+			pr_err("avionics-hi3593: Failed to"
+			       " read priority labels\n");
+			goto done;
+		}
+	}
+
+	for (i = 0; i < 3; i++) {
+		if (status & pl_bits[i]) {
+			buffer[3] = pl[2-i];
+			err = hi3593_rx_worker_spi_write_then_read(priv, &pl_cmd[i],
+						  sizeof(pl_cmd[0]), buffer,
+						  sizeof(buffer) - 1);
+			if (unlikely(err)) {
+				pr_err("avionics-hi3593: Failed to"
+				       " read priority label\n");
+				goto done;
+			}
+		}
+	}
+
+    i = 0;
+	while (!(status & HI3593_FIFO_EMPTY)) {
+        err = hi3593_rx_worker_spi_write_then_read(priv,
+                      &rd_cmd, sizeof(rd_cmd),
+                      buffer, sizeof(buffer));
+        if (unlikely(err)) {
+            pr_err("avionics-hi3593: Failed to"
+                   " read from fifo\n");
+            goto done;
+        }
+
+        err = hi3593_rx_worker_spi_write_then_read(priv,
+                &status_cmd, sizeof(status_cmd), &status, sizeof(status));
+        if (unlikely(err < 0)) {
+            pr_err("avionics-hi3593: Failed to"
+                   " read status\n");
+            goto done;
+        }
+
+        i++;
+        if (i > 10000) {
+            pr_err("avionics-hi3593: Failed to clear FIFO\n");
+            goto done;
+        }
+
+	}
+
+    pr_info("avionics-hi3593: Emptied FIFO in %d\n", i);
+
+done:
+	kfree(data);
+
 }
 
 static void hi3593_rx_worker(struct work_struct *work)
@@ -620,6 +737,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 		pr_err("avionics-hi3593: Failed to allocate data buffer\n");
 		return;
 	}
+
+	mutex_lock(priv->lock);
 
 	err = hi3593_rx_worker_spi_write_then_read(priv,
 					&status_cmd, sizeof(status_cmd), &status, sizeof(status));
@@ -771,6 +890,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 	}
 
 done:
+	mutex_unlock(priv->lock);
 	kfree(data);
 	enable_irq(priv->irq);
 
@@ -1125,9 +1245,9 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 
 	if (hi3593->inverted_irqs) {
 		pr_info("Expecting IRQs to be inverted in hardware\n");
-		irq_flags = IRQF_TRIGGER_FALLING | IRQF_ONESHOT;
+		irq_flags = IRQF_TRIGGER_FALLING | IRQF_ONESHOT| IRQF_NO_AUTOEN;
 	} else {
-		irq_flags = IRQF_TRIGGER_RISING | IRQF_ONESHOT;
+		irq_flags = IRQF_TRIGGER_RISING | IRQF_ONESHOT| IRQF_NO_AUTOEN;
 	}
 
 	hi3593->wq = alloc_workqueue("hi3593", WQ_HIGHPRI, 0);
@@ -1226,7 +1346,6 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 			return -EINVAL;
 		}
 		priv->irq = hi3593->irq[i];
-		disable_irq_nosync(priv->irq);
 
 		err = hi3593_set_arinc429rx(&avionics_arinc429rx_default,
 					    hi3593->rx[i]);
