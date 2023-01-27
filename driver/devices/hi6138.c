@@ -537,14 +537,22 @@ static void hi6138_irq_worker(struct work_struct *work)
 	}
 
 done:
-	gpio_set_value(hi6138->ackirq_gpio, 1);
+	err = gpio_direction_output(hi6138->ackirq_gpio, 1);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
+	}
+
 	usleep_range(1, 10);
-	gpio_set_value(hi6138->ackirq_gpio, 0);
+
+	err = gpio_direction_output(hi6138->ackirq_gpio, 0);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
+	}
 
 	usleep_range(100000, 1000000); /* Added to aid in debugging, REMOVE */
 
-	mutex_unlock(&hi6138->lock);
 	enable_irq(hi6138->irq);
+	mutex_unlock(&hi6138->lock);
 }
 
 static irqreturn_t hi6138_irq(int irq, void *data)
@@ -555,6 +563,8 @@ static irqreturn_t hi6138_irq(int irq, void *data)
 		pr_err("avionics-hi6138: Unexpected irq %d\n", irq);
 		return IRQ_HANDLED;
 	}
+
+	pr_err("avionics-hi6138: irq %d\n", irq);
 
 	disable_irq_nosync(hi6138->irq);
 
@@ -629,14 +639,13 @@ static int hi6138_get_config(struct spi_device *spi)
 	}
 
 	err = request_irq(hi6138->irq, hi6138_irq,
-			  IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+			  IRQF_TRIGGER_FALLING | IRQF_ONESHOT | IRQF_NO_AUTOEN,
 			  "hi6138", hi6138);
 	if (err) {
 		pr_err("avionics-hi6138: Failed to register"
 		       " irq %d\n", hi6138->irq);
 		return -EINVAL;
 	}
-	disable_irq_nosync(hi6138->irq);
 
 	return 0;
 }
@@ -867,6 +876,14 @@ static void hi6138_remove(struct spi_device *spi)
 		hi6138->reset_gpio = 0;
 	}
 
+	if (hi6138->ackirq_gpio > 0) {
+		if (gpio_direction_output(hi6138->ackirq_gpio, 1) < 0) {
+			pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
+		}
+		gpio_free(hi6138->ackirq_gpio);
+		hi6138->ackirq_gpio = 0;
+	}
+
 	if (hi6138->wq) {
 		flush_scheduled_work();
 		flush_workqueue(hi6138->wq);
@@ -920,7 +937,23 @@ static int hi6138_probe(struct spi_device *spi)
 		return err;
 	}
 
+	mutex_lock(&hi6138->lock);
+
 	enable_irq(hi6138->irq);
+
+	err = gpio_direction_output(hi6138->ackirq_gpio, 1);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
+		return err;
+	}
+	usleep_range(1000, 10000);
+	err = gpio_direction_output(hi6138->ackirq_gpio, 0);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
+		return err;
+	}
+
+	mutex_unlock(&hi6138->lock);
 
 	return 0;
 }
