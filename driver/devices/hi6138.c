@@ -35,7 +35,7 @@ MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
 MODULE_VERSION("1.0.0");
 
-#define HI6138_REG_MCFG1		0x0000
+#define HI6138_REG_MCFG1			0x0000
 #define HI6138_REG_MCFG1_TXINHA		(1<<15)
 #define HI6138_REG_MCFG1_TXINHB		(1<<14)
 #define HI6138_REG_MCFG1_MTENA		(1<<8)
@@ -686,19 +686,19 @@ static int hi6138_reset(struct spi_device *spi)
         return -1;
     }
 
-    err = gpio_direction_output(hi6138->reset_gpio, 1);
+    err = gpio_direction_output(hi6138->reset_gpio, 0);
     if (err < 0) {
         pr_err("avionics-hi6138: Failed to set gpio reset\n");
         return err;
     }
-	usleep_range(1000, 1500);
+	usleep_range(10000, 15000);
 
-    err = gpio_direction_output(hi6138->reset_gpio, 0);
+    err = gpio_direction_output(hi6138->reset_gpio, 1);
     if (err < 0) {
         pr_err("avionics-hi6138: Failed to clear gpio reset\n");
         return err;
     }
-	usleep_range(1000, 1500);
+	usleep_range(10000, 15000);
 
 	err = hi6138_get_reg(spi, HI6138_REG_MCFG2, &mcfg2);
 	if (err < 0) {
