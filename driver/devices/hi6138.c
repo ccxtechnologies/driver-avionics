@@ -481,6 +481,11 @@ static int hi6138_irq_bm(struct net_device *dev)
 			}
 
 			skb = avionics_device_alloc_skb(dev, length);
+			if (unlikely(!skb)) {
+				pr_err("avionics-hi6138-bm: Failed to"
+						" allocate RX buffer\n");
+				return -ENOMEM;
+			}
 
 			err = hi6138_get_reg(priv->spi, priv->smt_last_addr + 7,
 						 &buffer[0]);

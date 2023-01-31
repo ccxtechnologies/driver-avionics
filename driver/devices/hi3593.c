@@ -783,7 +783,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 
 				skb = avionics_device_alloc_skb(dev, HI3593_SAMPLE_SIZE);
 				if (unlikely(!skb)) {
-					pr_err("avionics-lb: Failed to"
+					pr_err("avionics-hi3593: Failed to"
 					       " allocate RX buffer\n");
 					goto done;
 				}
