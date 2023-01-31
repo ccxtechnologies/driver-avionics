@@ -61,6 +61,7 @@ struct __attribute__((__packed__)) avionics_proto_header_data {
 	__s64 time_msecs;	/* sampled time, epoch time in milli-seconds */
 	__u32 status;		/* status, bit values are format dependant */
 	__u64 count;		/* counter, value is format dependant */
+	__u8 width;		    /* base word size in bytes */
 	__u8 length;		/* number of bytes in packet */
 	__u8 data[];		/* data samples */
 };

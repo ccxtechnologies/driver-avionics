@@ -687,7 +687,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 	struct sk_buff *skb;
 	struct timespec64 tv;
 	avionics_data *data;
-	__u8 status_cmd, rd_cmd, buffer[4];
+	__u8 status_cmd, rd_cmd, buffer[sizeof(__u32)];
 	__u8 pl_cmd[3], pl_rd, pl[3];
 	const __u8 pl_bits[3] = {
 		HI3593_PRIORITY_LABEL1,
@@ -732,12 +732,12 @@ static void hi3593_rx_worker(struct work_struct *work)
 		pr_err("avionics-hi3593: Failed to allocate data buffer\n");
 		return;
 	}
-
+	data->word_size = sizeof(__u32)
 
 	mutex_lock(priv->lock);
 
 	err = hi3593_rx_worker_spi_write_then_read(priv,
-					&status_cmd, sizeof(status_cmd), &status, sizeof(status));
+			&status_cmd, sizeof(status_cmd), &status, sizeof(status));
 	if (err < 0) {
 		pr_err("avionics-hi3593: Failed to read status\n");
 		goto done;
@@ -749,8 +749,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 	}
 
 	if (status & (pl_bits[0] | pl_bits[1] | pl_bits[2])) {
-		err = hi3593_rx_worker_spi_write_then_read(priv, &pl_rd, sizeof(pl_rd),
-					  pl, sizeof(pl));
+		err = hi3593_rx_worker_spi_write_then_read(priv,
+				&pl_rd, sizeof(pl_rd), pl, sizeof(pl));
 		if (unlikely(err)) {
 			pr_err("avionics-hi3593: Failed to read priority labels\n");
 			goto done;
@@ -761,8 +761,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 		if (status & pl_bits[i]) {
 			buffer[3] = pl[2-i];
 			err = hi3593_rx_worker_spi_write_then_read(priv, &pl_cmd[i],
-						  sizeof(pl_cmd[0]), buffer,
-						  sizeof(buffer) - 1);
+						  sizeof(pl_cmd[0]), buffer, sizeof(buffer) - 1);
+
 			if (unlikely(err)) {
 				pr_err("avionics-hi3593: Failed to"
 					   " read priority label\n");
@@ -772,11 +772,12 @@ static void hi3593_rx_worker(struct work_struct *work)
 			if(!priv->check_parity ||
 			   (priv->even_parity && (0x80&buffer[0])) ||
 			   ((0x80&buffer[0]) == 0x00)) {
+
 				if (priv->check_parity && priv->even_parity) {
 					buffer[0] &= 0x7f;
 				}
 
-				skb = avionics_device_alloc_skb(dev, sizeof(avionics_data) + sizeof(__u32));
+				skb = avionics_device_alloc_skb(dev, sizeof(avionics_data) + data->width);
 				if (unlikely(!skb)) {
 					pr_err("avionics-hi3593: Failed to"
 						   " allocate RX buffer\n");
@@ -785,10 +786,10 @@ static void hi3593_rx_worker(struct work_struct *work)
 
 				ktime_get_real_ts64(&tv);
 				data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
-				data->length = sizeof(__u32);
-				memcpy(&data->data[0], buffer, sizeof(__u32));
+				data->length = data->width;
+				memcpy(&data->data[0], buffer, data->length);
 
-				skb_copy_to_linear_data(skb, data, sizeof(avionics_data) + sizeof(__u32));
+				skb_copy_to_linear_data(skb, data, sizeof(avionics_data) + data->length);
 
 				stats->rx_packets++;
 				stats->rx_bytes += skb->len;
@@ -810,10 +811,9 @@ static void hi3593_rx_worker(struct work_struct *work)
 		data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
 		data->length = 0;
 
-		for (i = 0; i < HI3593_MAX_DATA; i += sizeof(buffer)) {
+		for (i = 0; i < HI3593_MAX_DATA; i += data->width) {
 			err = hi3593_rx_worker_spi_write_then_read(priv,
-						  &rd_cmd, sizeof(rd_cmd),
-						  buffer, sizeof(buffer));
+					&rd_cmd, sizeof(rd_cmd), buffer, sizeof(buffer));
 			if (unlikely(err)) {
 				pr_err("avionics-hi3593: Failed to read from fifo\n");
 				goto done;
@@ -827,8 +827,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 					buffer[0] &= 0x7f;
 				}
 
-				memcpy(&data->data[i], buffer, sizeof(buffer));
-				data->length += sizeof(buffer);
+				memcpy(&data->data[i], buffer, data->width);
+				data->length += data->width;
 
 			} else {
 				stats->rx_errors++;
@@ -869,6 +869,10 @@ static void hi3593_rx_worker(struct work_struct *work)
 		usleep_range(priv->rx_udelay_min, priv->rx_udelay_max);
 		err = hi3593_rx_worker_spi_write_then_read(priv,
 				&status_cmd, sizeof(status_cmd), &status, sizeof(status));
+		if (unlikely(err < 0)) {
+			pr_err("avionics-hi3593: Failed to read status\n");
+			goto done;
+		}
 
 	}
 
@@ -910,8 +914,7 @@ static void hi3593_tx_worker(struct work_struct *work)
 	struct timespec64 tv;
 	int err, i;
 
-	priv = container_of((struct delayed_work*)work,
-				struct hi3593_priv, worker);
+	priv = container_of((struct delayed_work*)work, struct hi3593_priv, worker);
 	dev = priv->dev;
 	stats = &dev->stats;
 
@@ -935,7 +938,21 @@ static void hi3593_tx_worker(struct work_struct *work)
 
 	wr_cmd[0] = HI3593_OPCODE_WR_TX_FIFO;
 	data = (avionics_data *)skb->data;
-	for (i = 0; i < data->length; i += sizeof(__u32)) {
+	if (data->width == 0) {
+		data->width = sizeof(__u32);
+	}
+
+	if (data->width != sizeof(__u32)) {
+		pr_err("avionics-hi3593: Expect data width for ARINC-429 Data\n");
+		return;
+	}
+
+	if (data->length % data->width) {
+		pr_err("avionics-hi3593: ARINC-429 Data Length must be divisible by 4 bytes\n");
+		return;
+	}
+
+	for (i = 0; i < data->length; i += data->width) {
 		status = spi_w8r8(priv->spi, rd_cmd);
 		if (status < 0) {
 			pr_err("avionics-hi3593: Failed to read status\n");
@@ -959,7 +976,7 @@ static void hi3593_tx_worker(struct work_struct *work)
 			}
 		}
 
-		memcpy(&wr_cmd[1], &data->data[i], sizeof(__u32));
+		memcpy(&wr_cmd[1], &data->data[i], data->width);
 
 		if (data->time_msecs) {
 			ktime_get_real_ts64(&tv);
