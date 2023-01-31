@@ -70,7 +70,7 @@ MODULE_VERSION("1.0.0");
 #define HI6138_REG_SMTIRQ_CBUFMAT	(1<<6)
 #define HI6138_REG_SMTIRQ_DBUFMAT	(1<<5)
 #define HI6138_REG_SMTIRQ_SMTMERR	(1<<4)
-#define HI6138_REG_SMTIRQ_SMTEON	(1<<3)
+#define HI6138_REG_SMTIRQ_SMTEOM	(1<<3)
 
 #define HI6138_REG_SMTSTART		0x002F
 #define HI6138_REG_SMTNEXT		0x0030
@@ -142,7 +142,7 @@ static int hi6138_get_fastaccess(struct spi_device *spi, __u8 address, __u16 *va
 				  &buffer, sizeof(buffer));
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to fast-access read 0x%x\n",
-		       address);
+			   address);
 		return err;
 	}
 
@@ -164,7 +164,7 @@ static int hi6138_set_fastaccess(struct spi_device *spi, __u8 address, __u16 val
 	err = spi_write(spi, buffer, sizeof(buffer));
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to fast-access write 0x%x\n",
-		       address);
+			   address);
 		return err;
 	}
 
@@ -181,7 +181,7 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 	err = hi6138_set_fastaccess(spi, HI6138_REG_MEMPTRA, address);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to set memory pointer to 0x%x\n",
-		       address);
+			   address);
 		return err;
 	}
 
@@ -197,10 +197,10 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 		memcpy(&buffer[1+i*sizeof(vbuffer)], &vbuffer, sizeof(vbuffer));
 	}
 
-	err = spi_write(spi, buffer, sizeof(buffer));
+	err = spi_write(spi, buffer, 1 + sizeof(vbuffer)*length);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to write to memory at 0x%x\n",
-		       address);
+			   address);
          kvfree(buffer);
 		return err;
 	}
@@ -220,7 +220,7 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
 	err = hi6138_set_fastaccess(spi, HI6138_REG_MEMPTRA, address);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to set memory pointer to 0x%x\n",
-		       address);
+			   address);
 		return err;
 	}
 
@@ -231,10 +231,10 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
     }
 
 	err = spi_write_then_read(spi, &cmd, sizeof(cmd),
-				  buffer, sizeof(buffer));
+				  buffer, sizeof(vbuffer)*length);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to read from memory at 0x%x\n",
-		       address);
+			   address);
         kvfree(buffer);
 		return err;
 	}
@@ -259,7 +259,7 @@ static int hi6138_set_reg(struct spi_device *spi, __u16 address, __u16 value)
 }
 
 static void hi6138_get_mil1553bm(struct avionics_mil1553bm *config,
-		       const struct net_device *dev)
+			   const struct net_device *dev)
 {
 	struct hi6138_priv *priv;
 
@@ -319,30 +319,30 @@ static int hi6138_bm_open(struct net_device *dev)
 	}
 
 	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_MCFG1,
-				    mcfg1|HI6138_REG_MCFG1_MTENA);
+					mcfg1|HI6138_REG_MCFG1_MTENA);
 	if (err < 0) {
 		pr_err("avionics-hi6138-bm: Failed set master config register 1\n");
 		return err;
 	}
 
 	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_SMTIRQ_ENABLE,
-				    HI6138_REG_SMTIRQ_SMTEON);
+					HI6138_REG_SMTIRQ_SMTEOM);
 	if (err < 0) {
 		pr_err("avionics-hi6138-bm: Failed set SMT IRQ Enable register\n");
 		return err;
 	}
 
 	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_SMTIRQ_OUTPUT,
-				    HI6138_REG_SMTIRQ_SMTEON);
+					HI6138_REG_SMTIRQ_SMTEOM);
 	if (err < 0) {
 		pr_err("avionics-hi6138-bm: Failed set SMT IRQ Output register\n");
 		return err;
 	}
 
 	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_SMTCFG, 0x0803
-				    | HI6138_REG_SMTCFG_MTTO_LONG
-				    | HI6138_REG_SMTCFG_MTCRIW |
-				    HI6138_REG_SMTCFG_MTSRR);
+					| HI6138_REG_SMTCFG_MTTO_LONG
+					| HI6138_REG_SMTCFG_MTCRIW |
+					HI6138_REG_SMTCFG_MTSRR);
 	if (err < 0) {
 		pr_err("avionics-hi6138-bm: Failed set SMT config register\n");
 		return err;
@@ -382,7 +382,7 @@ static int hi6138_bm_stop(struct net_device *dev)
 	}
 
 	err = hi6138_set_fastaccess(priv->spi, HI6138_REG_MCFG1,
-				    mcfg1&(~HI6138_REG_MCFG1_MTENA));
+					mcfg1&(~HI6138_REG_MCFG1_MTENA));
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed set master config register 1\n");
 		return err;
@@ -421,22 +421,24 @@ static int hi6138_irq_bm(struct net_device *dev)
 	}
 
 	err = hi6138_get_fastaccess(priv->spi, HI6138_REG_SMTIRQ_PENDING,
-				    &smtirq_status);
+					&smtirq_status);
 	if (err < 0) {
 		pr_err("avionics-hi6138-bm: Failed read irq"
-		       " pending register\n");
+			   " pending register\n");
 		return err;
 	}
 
-	if (smtirq_status & HI6138_REG_SMTIRQ_SMTEON) {
+	if (smtirq_status & HI6138_REG_SMTIRQ_SMTEOM) {
 		err = hi6138_get_reg(priv->spi, HI6138_REG_SMTLAST, &cmd_addr);
 		if (err < 0) {
 			pr_err("avionics-hi6138-bm: Failed read"
-			       " last address register\n");
+				   " last address register\n");
 			return err;
 		}
 
-		if (cmd_addr < HI6138_CMD_STACK_START) {
+		if ((cmd_addr < HI6138_CMD_STACK_START) ||
+                (cmd_addr > HI6138_CMD_STACK_END)) {
+			pr_err("avionics-hi6138: cmd_addr is out of range,  0x%x\n", cmd_addr);
 			return 0;
 		}
 
@@ -450,50 +452,56 @@ static int hi6138_irq_bm(struct net_device *dev)
 		}
 
 		for(; ((priv->smt_last_addr <=cmd_addr) || wrapped) ;
-		    priv->smt_last_addr += 8) {
+			priv->smt_last_addr += 8) {
 			if(priv->smt_last_addr >= HI6138_CMD_STACK_END) {
 				priv->smt_last_addr = HI6138_CMD_STACK_START;
 				wrapped = 0;
 			}
 
 			err = hi6138_get_reg(priv->spi, priv->smt_last_addr + 6,
-					     &data_addr);
+						 &data_addr);
 			if (err < 0) {
 				pr_err("avionics-hi6138-bm: Failed read"
-				       " data address\n");
+					   " data address\n");
 				return err;
 			}
 
+			if ((data_addr < HI6138_DATA_STACK_START) ||
+					(data_addr > HI6138_DATA_STACK_END)) {
+				pr_err("avionics-hi6138: data_addr is out of range,  0x%x\n", data_addr);
+				return 0;
+			}
+
 			err = hi6138_get_reg(priv->spi, priv->smt_last_addr + 5,
-					     &length);
+						 &length);
 			if (err < 0) {
 				pr_err("avionics-hi6138-bm: Failed read"
-				       " data length\n");
+					   " data length\n");
 				return err;
 			}
 
 			skb = avionics_device_alloc_skb(dev, length);
 
 			err = hi6138_get_reg(priv->spi, priv->smt_last_addr + 7,
-					     &buffer[0]);
+						 &buffer[0]);
 			if (err < 0) {
 				pr_err("avionics-hi6138-bm: Failed read"
-				       " command word\n");
+					   " command word\n");
 				return err;
 			}
 
 			if (length > 2) {
 				err = hi6138_get_mem(priv->spi, data_addr,
-						     &buffer[1], (length-2)/sizeof(buffer[1]));
+							 &buffer[1], (length-2)/sizeof(buffer[1]));
 				if (err < 0) {
 					pr_err("avionics-hi6138-bm: Failed read"
-					       " command word\n");
+						   " command word\n");
 					return err;
 				}
 			}
 
-			/* TODO: Convert to a format similar to A717, with an
-			 * offset counter to packatize the data */
+			/* TODO: Add timestamp */
+			/* TODO: Add message block status word */
 
 			skb_copy_to_linear_data(skb, buffer, length);
 
@@ -518,12 +526,12 @@ static void hi6138_irq_worker(struct work_struct *work)
 	int err;
 
 	hi6138 = container_of((struct work_struct*)work,
-			      struct hi6138, worker);
+				  struct hi6138, worker);
 
 	mutex_lock(&hi6138->lock);
 
 	err = hi6138_get_fastaccess(hi6138->spi, HI6138_REG_HIRQ_PENDING,
-				    &hirq_status);
+					&hirq_status);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed read hirq pending register\n");
 		goto done;
@@ -549,7 +557,7 @@ done:
 		pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
 	}
 
-	usleep_range(100000, 1000000); /* Added to aid in debugging, REMOVE */
+	usleep_range(100000, 1000000); /* Added to aid in debugging, TODO: REMOVE */
 
 	enable_irq(hi6138->irq);
 	mutex_unlock(&hi6138->lock);
@@ -564,10 +572,7 @@ static irqreturn_t hi6138_irq(int irq, void *data)
 		return IRQ_HANDLED;
 	}
 
-	pr_err("avionics-hi6138: irq %d\n", irq);
-
 	disable_irq_nosync(hi6138->irq);
-
 	queue_work(hi6138->wq, &hi6138->worker);
 
 	return IRQ_HANDLED;
@@ -607,10 +612,10 @@ static int hi6138_get_config(struct spi_device *spi)
 		}
 
 		err = devm_gpio_request_one(&spi->dev, hi6138->reset_gpio,
-					    GPIOF_OUT_INIT_LOW, "hi6138-reset");
+						GPIOF_OUT_INIT_LOW, "hi6138-reset");
 		if (err) {
 			pr_err("avionics-hi6138: Failed to"
-			       " register Reset GPIO\n");
+				   " register Reset GPIO\n");
 			return err;
 		}
 	}
@@ -623,10 +628,10 @@ static int hi6138_get_config(struct spi_device *spi)
 		}
 
 		err = devm_gpio_request_one(&spi->dev, hi6138->ackirq_gpio,
-					    GPIOF_OUT_INIT_LOW, "hi6138-ackirq");
+						GPIOF_OUT_INIT_LOW, "hi6138-ackirq");
 		if (err) {
 			pr_err("avionics-hi6138: Failed to"
-			       " register ACKIRQ GPIO\n");
+				   " register ACKIRQ GPIO\n");
 			return err;
 		}
 	}
@@ -634,7 +639,7 @@ static int hi6138_get_config(struct spi_device *spi)
 	hi6138->irq = irq_of_parse_and_map(dev->of_node, 0);
 	if (hi6138->irq < 0) {
 		pr_err("avionics-hi6138: Failed to get irq: %d\n",
-		       hi6138->irq);
+			   hi6138->irq);
 		return hi6138->irq;
 	}
 
@@ -643,7 +648,7 @@ static int hi6138_get_config(struct spi_device *spi)
 			  "hi6138", hi6138);
 	if (err) {
 		pr_err("avionics-hi6138: Failed to register"
-		       " irq %d\n", hi6138->irq);
+			   " irq %d\n", hi6138->irq);
 		return -EINVAL;
 	}
 
@@ -653,7 +658,7 @@ static int hi6138_get_config(struct spi_device *spi)
 static int hi6138_init_smt_mem(struct spi_device *spi)
 {
 	const __u16 base_addr = 0x00b0;
-	__u16 smt_addr_list[] = {
+	__u16 smt_addr_list[8] = {
 		HI6138_CMD_STACK_START,
 		HI6138_CMD_STACK_START,
 		HI6138_CMD_STACK_END,
@@ -662,7 +667,7 @@ static int hi6138_init_smt_mem(struct spi_device *spi)
 		HI6138_DATA_STACK_START,
 		HI6138_DATA_STACK_END,
 		HI6138_DATA_STACK_IRQ
-	};
+	}, smt_addr_list_verify[8];
 	int err;
 
 	err = hi6138_set_fastaccess(spi, HI6138_REG_SMTSTART, base_addr);
@@ -671,11 +676,23 @@ static int hi6138_init_smt_mem(struct spi_device *spi)
 		return err;
 	}
 
-	err = hi6138_set_mem(spi, base_addr, smt_addr_list,
-			     sizeof(smt_addr_list)/sizeof(smt_addr_list[0]));
+	err = hi6138_set_mem(spi, base_addr, smt_addr_list, 8);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed set configure SMT memory\n");
 		return err;
+	}
+
+	err = hi6138_get_mem(spi, base_addr, smt_addr_list_verify, 8);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed get configure SMT memory\n");
+		return err;
+	}
+
+	for (int i = 0; i < 8; i++) {
+		if (smt_addr_list[i] != smt_addr_list_verify[i]) {
+			pr_err("avionics-hi6138: Failed to set SMT addr %d: 0x%04x => 0x%04x\n",
+					i, smt_addr_list[i], smt_addr_list_verify[i]);
+		}
 	}
 
 	return 0;
@@ -720,9 +737,9 @@ static int hi6138_reset(struct spi_device *spi)
 
 	if (dev_id != 0x03) {
 		pr_err("avionics-hi6138: Wrong Device ID: 0x%x,"
-		       " this is the first verified access from this device"
-		       " so this error could be due to an issue with the device or"
-		       " the SPI bus.\n", dev_id);
+			   " this is the first verified access from this device"
+			   " so this error could be due to an issue with the device or"
+			   " the SPI bus.\n", dev_id);
 		return -1;
 	}
 
@@ -735,33 +752,33 @@ static int hi6138_reset(struct spi_device *spi)
 		dev_id, rev_id);
 
 	err = hi6138_set_fastaccess(spi, HI6138_REG_MCFG1,
-				    HI6138_REG_MCFG1_TXINHA |
-				    HI6138_REG_MCFG1_TXINHB |
-				    HI6138_REG_MCFG1_INTSEL);
+					HI6138_REG_MCFG1_TXINHA |
+					HI6138_REG_MCFG1_TXINHB |
+					HI6138_REG_MCFG1_INTSEL);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed set master config register 1\n");
 		return err;
 	}
 
 	err = hi6138_set_fastaccess(spi, HI6138_REG_HIRQ_ENABLE,
-				    HI6138_REG_HIRQ_HSPINT |
-				    HI6138_REG_HIRQ_RAMPF |
-				    HI6138_REG_HIRQ_RAMIF |
-				    HI6138_REG_HIRQ_RTIP |
-				    HI6138_REG_HIRQ_MTIP |
-				    HI6138_REG_HIRQ_BCIP);
+					HI6138_REG_HIRQ_HSPINT |
+					HI6138_REG_HIRQ_RAMPF |
+					HI6138_REG_HIRQ_RAMIF |
+					HI6138_REG_HIRQ_RTIP |
+					HI6138_REG_HIRQ_MTIP |
+					HI6138_REG_HIRQ_BCIP);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed set irq enable register\n");
 		return err;
 	}
 
 	err = hi6138_set_fastaccess(spi, HI6138_REG_HIRQ_OUTPUT,
-				    HI6138_REG_HIRQ_HSPINT |
-				    HI6138_REG_HIRQ_RAMPF |
-				    HI6138_REG_HIRQ_RAMIF |
-				    HI6138_REG_HIRQ_RTIP |
-				    HI6138_REG_HIRQ_MTIP |
-				    HI6138_REG_HIRQ_BCIP);
+					HI6138_REG_HIRQ_HSPINT |
+					HI6138_REG_HIRQ_RAMPF |
+					HI6138_REG_HIRQ_RAMIF |
+					HI6138_REG_HIRQ_RTIP |
+					HI6138_REG_HIRQ_MTIP |
+					HI6138_REG_HIRQ_BCIP);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed set irq output register\n");
 		return err;
@@ -774,8 +791,6 @@ static int hi6138_reset(struct spi_device *spi)
 		pr_err("avionics-hi6138: Failed to initialize SMT memory\n");
 		return err;
 	}
-
-
 
 	return 0;
 }
@@ -802,7 +817,7 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 
 	if (!hi6138->bm ) {
 		pr_err("avionics-hi6138: Failed to allocate"
-		       " Bus Monitor netdev\n");
+			   " Bus Monitor netdev\n");
 		return -ENOMEM;
 	}
 
@@ -811,7 +826,7 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 
 	if (!priv) {
 		pr_err("avionics-hi6138: Failed to get private data"
-		       " for Bus Monitor\n");
+			   " for Bus Monitor\n");
 		return -EINVAL;
 	}
 	priv->dev = hi6138->bm;
@@ -821,17 +836,17 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 	skb_queue_head_init(&priv->skbq);
 
 	err = hi6138_set_mil1553bm(&avionics_mil1553bm_default,
-				    hi6138->bm);
+					hi6138->bm);
 	if (err) {
 		pr_err("avionics-hi6138: Failed to set Bus Monitor"
-		       " default settings\n");
+			   " default settings\n");
 		return -EINVAL;
 	}
 
 	err = avionics_device_register(hi6138->bm);
 	if (err) {
 		pr_err("avionics-hi6138: Failed to register"
-		       " Bus Monitor netdev\n");
+			   " Bus Monitor netdev\n");
 		return -EINVAL;
 	}
 
@@ -865,7 +880,7 @@ static void hi6138_remove(struct spi_device *spi)
 	}
 
     if (hi6138->wq) {
-	    cancel_work_sync(&hi6138->worker);
+		cancel_work_sync(&hi6138->worker);
     }
 
 	if (hi6138->reset_gpio > 0) {
@@ -916,7 +931,7 @@ static int hi6138_probe(struct spi_device *spi)
 	err = hi6138_get_config(spi);
 	if (err) {
 		pr_err("avionics-hi6138: Failed to get system configuration"
-		       " from dts file: %d\n",err);
+			   " from dts file: %d\n",err);
 		hi6138_remove(spi);
 		return err;
 	}
@@ -924,7 +939,7 @@ static int hi6138_probe(struct spi_device *spi)
 	err = hi6138_reset(spi);
 	if (err) {
 		pr_err("avionics-hi6138: Failed to bring device"
-		       " out of reset: %d\n",err);
+			   " out of reset: %d\n",err);
 		hi6138_remove(spi);
 		return err;
 	}
@@ -932,7 +947,7 @@ static int hi6138_probe(struct spi_device *spi)
 	err = hi6138_create_netdevs(spi);
 	if (err) {
 		pr_err("avionics-hi6138: Failed to"
-		       " register netdevs: %d\n", err);
+			   " register netdevs: %d\n", err);
 		hi6138_remove(spi);
 		return err;
 	}
