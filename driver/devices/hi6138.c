@@ -25,6 +25,7 @@
 #include <linux/of_gpio.h>
 #include <linux/of_irq.h>
 #include <linux/interrupt.h>
+#include <linux/time.h>
 #include <linux/version.h>
 
 #include "avionics.h"
@@ -410,7 +411,8 @@ static int hi6138_irq_bm(struct net_device *dev)
 	__u16 smtirq_status, cmd_addr, data_addr, length;
 	int err, wrapped = 0;
 	struct sk_buff *skb;
-	__u16 buffer[36];
+	struct timespec64 tv;
+	avionics_data *data;
 
 	stats = &dev->stats;
 
@@ -472,43 +474,52 @@ static int hi6138_irq_bm(struct net_device *dev)
 				return 0;
 			}
 
-			err = hi6138_get_reg(priv->spi, priv->smt_last_addr + 5,
-						 &length);
+			err = hi6138_get_reg(priv->spi, priv->smt_last_addr + 5, &length);
 			if (err < 0) {
 				pr_err("avionics-hi6138-bm: Failed read"
 					   " data length\n");
 				return err;
 			}
 
-			skb = avionics_device_alloc_skb(dev, length);
+            data = kzalloc(sizeof(avionics_data) + length, GFP_KERNEL);
+            if (data == NULL) {
+                pr_err("avionics-hi6138-bm: Failed to allocate data buffer\n");
+                return -ENOMEM;
+            }
+            data->width = sizeof(__u32);
+            data->length = length;
+
+            ktime_get_real_ts64(&tv);
+            data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
+
+			err = hi6138_get_reg(priv->spi, priv->smt_last_addr + 7, (__u16*)data->data);
+			if (err < 0) {
+				pr_err("avionics-hi6138-bm: Failed read data byte 1\n");
+				return err;
+			}
+
+			if (length > 2) {
+				err = hi6138_get_mem(priv->spi, data_addr, (__u16*)&data->data[2],
+                        (length-2)/data->width);
+				if (err < 0) {
+					pr_err("avionics-hi6138-bm: Failed read data block\n");
+					return err;
+				}
+			}
+
+			/* TODO: Add message block status word */
+			/* TODO: Add 48-bit timestamp status word */
+
+			skb = avionics_device_alloc_skb(dev, sizeof(avionics_data) + length);
 			if (unlikely(!skb)) {
 				pr_err("avionics-hi6138-bm: Failed to"
 						" allocate RX buffer\n");
 				return -ENOMEM;
 			}
 
-			err = hi6138_get_reg(priv->spi, priv->smt_last_addr + 7,
-						 &buffer[0]);
-			if (err < 0) {
-				pr_err("avionics-hi6138-bm: Failed read"
-					   " command word\n");
-				return err;
-			}
+			skb_copy_to_linear_data(skb, data, sizeof(avionics_data) + length);
 
-			if (length > 2) {
-				err = hi6138_get_mem(priv->spi, data_addr,
-							 &buffer[1], (length-2)/sizeof(buffer[1]));
-				if (err < 0) {
-					pr_err("avionics-hi6138-bm: Failed read"
-						   " command word\n");
-					return err;
-				}
-			}
-
-			/* TODO: Add timestamp */
-			/* TODO: Add message block status word */
-
-			skb_copy_to_linear_data(skb, buffer, length);
+            kfree(data);
 
 			stats->rx_packets++;
 			stats->rx_bytes += skb->len;

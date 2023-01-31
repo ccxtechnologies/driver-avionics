@@ -732,7 +732,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 		pr_err("avionics-hi3593: Failed to allocate data buffer\n");
 		return;
 	}
-	data->word_size = sizeof(__u32)
+	data->width = sizeof(__u32);
 
 	mutex_lock(priv->lock);
 
