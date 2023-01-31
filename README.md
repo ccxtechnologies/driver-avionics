@@ -1,10 +1,6 @@
 # driver-avionics
 Socket based Avionics Networking Driver for Linux
 
-Includes ARINC-429 and ARINC-717 interfaces, can be expanded to include new protocols like MIL-1553, etc.
-
-__NOTE: The linux kernel must be configured for 1000 ticks per second (CONFIG_HZ_1000) for the higher ARINC-717 rates__
-
 ## Notes on Kernel Header Files
 
 In order to create a socket device with a configurable interface we would technically have to add a socket
@@ -44,10 +40,10 @@ read from the device at the same time.
 If the time counter on transmit data will be used to delay the data until the epoch time that is set. If the setting
 is less than the current time, or greater than 6 minutes in the future the data will be sent immediatly.
 
-NOTE: Transmit timestamps only make sense on interfaces that are acynchronous like ARINC-429, they will have no
-impact on synchronous systems like ARINC-717.
+## Header Protocol
+
 
 # Kernel Version
 
-All development and testing was done on kernel versions 4.9 to 5.6, this driver will probably work on
+All development and testing was done on kernel versions 4.9 to 5.18, this driver will probably work on
 different kernels but may require some updates.
