@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2021, CCX Technologies
+ * Copyright (C) 2019-2023, CCX Technologies
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the version 2 of the GNU General Public License
@@ -52,13 +52,17 @@
 #define AVIONICS_PROTO_RAW		1
 #define AVIONICS_PROTO_TIMESTAMP	2
 
-struct __attribute__((__packed__)) avionics_proto_raw_data {
-	__u32 value;		/* data word, format depends on interface type */
+struct __attribute__((__packed__)) avionics_proto_timestamp_data {
+	__s64 time_msecs;	/* sampled time, epoch time in milli-seconds */
+	__u32 value;		/* data word */
 };
 
-struct __attribute__((__packed__)) avionics_proto_timestamp_data {
-	__s64 time_msecs;	/* epoch time in milli-seconds */
-	__u32 value;		/* data word, format depends on interface type */
+struct __attribute__((__packed__)) avionics_proto_header_data {
+	__s64 time_msecs;	/* sampled time, epoch time in milli-seconds */
+	__u32 status;		/* status, bit values are format dependant */
+	__u64 count;		/* counter, value is format dependant */
+	__u8 length;		/* number of bytes in packet */
+	__u8 data[];		/* data samples */
 };
 
 struct sockaddr_avionics {
@@ -70,9 +74,9 @@ struct sockaddr_avionics {
 };
 
 #define ARINC429_LABEL(value)		(value & 0x000000ff)
-#define ARINC429_SDI(value)		((value & 0x00000300) >> 8)
+#define ARINC429_SDI(value)			((value & 0x00000300) >> 8)
 #define ARINC429_DATA(value)		((value & 0x1ffffc00) >> 10)
-#define ARINC429_SSM(value)		((value & 0x60000000) >> 29)
+#define ARINC429_SSM(value)			((value & 0x60000000) >> 29)
 #define ARINC429_PARITY(value)		((value & 0x80000000) >> 31)
 
 #define ARINC717_WORD(value)		((value & 0x0fff0000) >> 16)
@@ -85,14 +89,14 @@ struct avionics_rate {
 	__u32 rate_hz;
 };
 
-#define AVIONICS_ARINC429RX_FLIP_LABEL_BITS		(1<<7)
-#define AVIONICS_ARINC429RX_SD9_MASK			(1<<6)
-#define AVIONICS_ARINC429RX_SD10_MASK			(1<<5)
-#define AVIONICS_ARINC429RX_SD_MASK_ENABLE		(1<<4)
-#define AVIONICS_ARINC429RX_PARITY_CHECK		(1<<3)
+#define AVIONICS_ARINC429RX_FLIP_LABEL_BITS			(1<<7)
+#define AVIONICS_ARINC429RX_SD9_MASK				(1<<6)
+#define AVIONICS_ARINC429RX_SD10_MASK				(1<<5)
+#define AVIONICS_ARINC429RX_SD_MASK_ENABLE			(1<<4)
+#define AVIONICS_ARINC429RX_PARITY_CHECK			(1<<3)
 #define AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE		(1<<2)
 #define AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE	(1<<1)
-#define AVIONICS_ARINC429RX_EVEN_PARITY			(1<<0)
+#define AVIONICS_ARINC429RX_EVEN_PARITY				(1<<0)
 
 struct avionics_arinc429rx {
 	__u8 flags;
@@ -121,7 +125,7 @@ struct avionics_arinc717rx {
 };
 
 #define AVIONICS_ARINC717TX_SLEW		(3<<1)
-#define AVIONICS_ARINC717TX_SELF_TEST		(1<<0)
+#define AVIONICS_ARINC717TX_SELF_TEST	(1<<0)
 
 struct avionics_arinc717tx {
 	__u8 flags;
