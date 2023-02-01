@@ -27,6 +27,26 @@ AVIONICS_PROTO_RAW = 1
 AVIONICS_PROTO_TIMESTAMP = 2
 AVIONICS_PROTO_PACKET = 3
 
+
+class avionics_proto_timestamp_data(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+            ('time_msecs', ctypes.c_int64),
+            ('value', ctypes.c_uint32),
+    ]
+
+
+class avionics_proto_packet_data(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+            ('time_msecs', ctypes.c_int64),
+            ('status', ctypes.c_uint32),
+            ('count', ctypes.c_uint64),
+            ('width', ctypes.c_uint8),
+            ('length', ctypes.c_uint8),
+    ]
+
+
 # ===============================
 
 
@@ -147,5 +167,14 @@ if __name__ == "__main__":
                     for i in range(0, len(data), 4):
                         d = int.from_bytes(data[i:i + 4], "little")
                         print(f"{i:08d}: 0x{d:08x}")
+
+                elif protocol_name == "timestamp":
+                    data_size = ctypes.sizeof(avionics_proto_timestamp_data)
+                    print(data_size)
+                    for i in range(0, len(data), data_size):
+                        d = avionics_proto_timestamp_data.from_buffer_copy(
+                                data[i:i + data_size]
+                        )
+                        print(f"{i:08d}: {d.time_msecs} 0x{d.value:08x}")
 
     print("===============================")
