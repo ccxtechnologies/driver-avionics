@@ -23,6 +23,7 @@
 #include "protocol-timestamp.h"
 #include "protocol.h"
 #include "avionics.h"
+#include "avionics-device.h"
 
 /* ====== Timestamp Protocol ===== */
 
@@ -33,37 +34,47 @@ static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
 	struct protocol_raw_sock *psk = (struct protocol_raw_sock*)sk;
 	struct sk_buff *skb;
 	struct net_device *dev;
-	int err;
+    avionics_data *data;
+    struct avionics_proto_timestamp_data *ts_data;
+	int err, i;
 
 	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
 					msg, size, &dev);
 	if (err) {
-		pr_err("avionics-protocol-raw: Can't find device: %d.\n", err);
+		pr_err("avionics-protocol-timestamp: Can't find device: %d.\n", err);
 		return err;
 	}
 
-	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT,
-				      sk, size);
-
+	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT, sk,
+            size + (size - sizeof(avionics_data))*(sizeof(struct avionics_proto_timestamp_data) - 1));
 	if (!skb) {
-		pr_err("avionics-protocol-raw: Unable to allocate skbuff\n");
+		pr_err("avionics-protocol-timestamp: Unable to allocate skbuff\n");
 		dev_put(dev);
 		return -ENOMEM;
 	}
 
-	err = memcpy_from_msg(skb_put(skb, size), msg, size);
+    skb_reserve(skb, sizeof(avionics_data));
+	err = memcpy_from_msg(skb->head, msg, size);
 	if (err < 0) {
-		pr_err("avionics-protocol-raw: Can't memcpy from msg: %d.\n",
-		       err);
+		pr_err("avionics-protocol-timestamp: Can't memcpy from msg: %d.\n", err);
 		kfree_skb(skb);
 		dev_put(dev);
 		return err;
 	}
 
+    data = (avionics_data *)skb->head;
+    for (i = 0; i < data->length; i += data->width) {
+        ts_data = (struct avionics_proto_timestamp_data *)(skb->data +
+             (data->length - 1)*sizeof(struct avionics_proto_timestamp_data) -
+             (i/data->width)*sizeof(struct avionics_proto_timestamp_data));
+        memcpy(&ts_data->value, &data->data[i], data->width);
+        ts_data->time_msecs = data->time_msecs;
+    }
+    skb_put(skb, data->length*sizeof(struct avionics_proto_timestamp_data));
+
 	err = protocol_send_to_netdev(dev, skb);
 	if (err) {
-		pr_err("avionics-protocol-raw: Failed to send packet: %d.\n",
-		       err);
+		pr_err("avionics-protocol-timestamp: Failed to send packet: %d.\n", err);
 		return err;
 	}
 

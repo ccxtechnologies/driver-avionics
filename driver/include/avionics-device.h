@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019, CCX Technologies
+ * Copyright (C) 2019-2023, CCX Technologies
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the version 2 of the GNU General Public License
@@ -19,7 +19,7 @@
 
 #include "avionics.h"
 
-typedef struct avionics_proto_header_data avionics_data;
+typedef struct avionics_proto_packet_data avionics_data;
 
 struct avionics_ops {
 	const char *name;

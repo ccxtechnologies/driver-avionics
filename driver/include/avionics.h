@@ -49,15 +49,16 @@
 
 /* ================= Defintions for Socket Interface =================== */
 
-#define AVIONICS_PROTO_RAW		1
+#define AVIONICS_PROTO_RAW			1
 #define AVIONICS_PROTO_TIMESTAMP	2
+#define AVIONICS_PROTO_PACKET		3
 
 struct __attribute__((__packed__)) avionics_proto_timestamp_data {
 	__s64 time_msecs;	/* sampled time, epoch time in milli-seconds */
 	__u32 value;		/* data word */
 };
 
-struct __attribute__((__packed__)) avionics_proto_header_data {
+struct __attribute__((__packed__)) avionics_proto_packet_data {
 	__s64 time_msecs;	/* sampled time, epoch time in milli-seconds */
 	__u32 status;		/* status, bit values are format dependant */
 	__u64 count;		/* counter, value is format dependant */
