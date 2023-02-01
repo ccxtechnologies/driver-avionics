@@ -101,16 +101,16 @@ static int protocol_raw_recvmsg(struct socket *sock,
 		return -ENOMEM;
 	}
 
-	if (size < skb->len) {
-		msg->msg_flags |= MSG_TRUNC;
-	} else {
-		size = skb->len;
-	}
-
 	data = (avionics_data *)skb->data;
 
-	if (data->length != (size - sizeof(avionics_data))) {
+	if (data->length != (skb->len - sizeof(avionics_data))) {
 		return -EAFNOSUPPORT;
+	}
+
+	if (size < data->length) {
+		msg->msg_flags |= MSG_TRUNC;
+	} else {
+		size = data->length;
 	}
 
 	err = memcpy_to_msg(msg, data->data, data->length);
@@ -135,7 +135,7 @@ static int protocol_raw_recvmsg(struct socket *sock,
 
 	skb_free_datagram(sk, skb);
 
-	return data->length;
+	return size;
 }
 
 static const struct proto_ops protocol_raw_ops = {

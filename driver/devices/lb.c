@@ -50,8 +50,6 @@ static void lb_rx(struct sk_buff *skb_xmit, struct net_device *dev)
     stats->rx_packets++;
     stats->rx_bytes += data->length;
 
-    pr_err("avionics-lb: %d 0x%x\n", skb->len, skb->data[0]);
-
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
     netif_rx_ni(skb);
 #else
@@ -80,7 +78,7 @@ static netdev_tx_t lb_start_xmit(struct sk_buff *skb,
     }
 
     stats->tx_packets++;
-    stats->tx_bytes += data->len;
+    stats->tx_bytes += data->length;
 
     lb_rx(skb, dev);
 

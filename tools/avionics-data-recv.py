@@ -10,6 +10,8 @@ import ctypes
 import struct
 import fcntl
 
+import datetime
+
 # ===== from linux/socket.h =====
 
 AF_ASH = 18
@@ -175,6 +177,9 @@ if __name__ == "__main__":
                         d = avionics_proto_timestamp_data.from_buffer_copy(
                                 data[i:i + data_size]
                         )
-                        print(f"{i:08d}: {d.time_msecs} 0x{d.value:08x}")
+                        ts = datetime.datetime.utcfromtimestamp(
+                                d.time_msecs / 1000.0
+                        ).isoformat()
+                        print(f"{i:08d}: {ts} 0x{d.value:08x}")
 
     print("===============================")
