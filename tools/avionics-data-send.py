@@ -83,13 +83,13 @@ def avionics_addr(sock, ifname):
 
 
 def exit_help():
-    print("==== avionics-data-recv.py ====")
+    print("==== avionics-data-send.py ====")
     print("Error: invalid command line arguments")
     print(
             "== requires three command line arguments, protocol,"
-            " device name and output file"
+            " device name and input file"
     )
-    print("== example: avionics-data-recv.py raw16 avionics-lb0 data.bin")
+    print("== example: avionics-data-send.py raw16 avionics-lb0 data.bin")
     exit(1)
 
 
@@ -123,29 +123,29 @@ if __name__ == "__main__":
             exit(err)
 
         print(
-                f"-- Starting Receiver on {device_name}"
+                f"-- Starting Send on {device_name}"
                 f" with protocol {protocol_name} --"
         )
 
-        with open(file_name, 'wb') as fo:
-            while True:
-                data = sk.recv(4096)
-                print(f"+++ Received: {len(data)} bytes +++")
-                fo.write(data)
+        with open(file_name, 'rb') as fi:
+            data = fi.read()
 
-                if protocol_name == "raw8":
-                    for i in range(0, len(data), 1):
-                        d = int.from_bytes(data[i:i + 1], "little")
-                        print(f"{i:08d}: 0x{d:02x}")
+        bytes_ = sk.send(data)
+        print(f"+++ Sent: {bytes_} bytes +++")
 
-                elif protocol_name == "raw16":
-                    for i in range(0, len(data), 2):
-                        d = int.from_bytes(data[i:i + 2], "little")
-                        print(f"{i:08d}: 0x{d:04x}")
+        if protocol_name == "raw8":
+            for i in range(0, len(data), 1):
+                d = int.from_bytes(data[i:i + 1], "little")
+                print(f"{i:08d}: 0x{d:02x}")
 
-                elif protocol_name == "raw32":
-                    for i in range(0, len(data), 4):
-                        d = int.from_bytes(data[i:i + 4], "little")
-                        print(f"{i:08d}: 0x{d:08x}")
+        elif protocol_name == "raw16":
+            for i in range(0, len(data), 2):
+                d = int.from_bytes(data[i:i + 2], "little")
+                print(f"{i:08d}: 0x{d:04x}")
+
+        elif protocol_name == "raw32":
+            for i in range(0, len(data), 4):
+                d = int.from_bytes(data[i:i + 4], "little")
+                print(f"{i:08d}: 0x{d:08x}")
 
     print("===============================")
