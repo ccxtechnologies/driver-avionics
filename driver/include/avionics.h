@@ -19,7 +19,7 @@
 
 /************************************************************************
  * CCX: This is an ugly hack so that we can build this out of tree without
- * patching the kernel, delete it and create new definions in the propper
+ * patching the kernel, delete it and create new definitions in the proper
  * place if this is ever pulled into your kernel. */
 
 /* should be in include/linux/socket.h, and should have it's own
