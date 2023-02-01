@@ -6,6 +6,9 @@ ccflags-y	+= -D__CHECK_ENDIAN__
 obj-m		+= avionics.o
 avionics-y	:= net/avionics.o net/protocol.o net/protocol-raw.o net/protocol-timestamp.o net/protocol-packet.o net/socket-list.o net/device.o
 
+obj-m		+= avionics-lb.o
+avionics-lb-y	:= devices/lb.o
+
 obj-m		+= avionics-hi3593.o
 avionics-hi3593-y	:= devices/hi3593.o
 
