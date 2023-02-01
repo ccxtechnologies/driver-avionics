@@ -851,7 +851,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 		if (data->length) {
 			skb = avionics_device_alloc_skb(dev, sizeof(avionics_data) + data->length);
 			if (unlikely(!skb)) {
-				pr_err("avionics-lb: Failed to allocate RX skb\n");
+				pr_err("avionics-hi3593: Failed to allocate RX skb\n");
 				goto done;
 			}
 
