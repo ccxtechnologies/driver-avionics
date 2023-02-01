@@ -31,7 +31,7 @@ AVIONICS_PROTO_PACKET = 3
 
 
 def net_device_set_up(ifname):
-    result = os.system(f"ip link set dev {ifname}")
+    result = os.system(f"ip link set dev {ifname} up")
 
     if (result == 256) and ("lb" in ifname):
         print(f"-- loop-back device {ifname} doesn't exists, creating")
@@ -39,7 +39,7 @@ def net_device_set_up(ifname):
             print(f"Error: failed to create avionics-lb device {ifname}")
             exit(result)
         else:
-            if os.system(f"ip link set dev {ifname}"):
+            if os.system(f"ip link set dev {ifname} up"):
                 print(f"Error: failed to set avionics-lb {ifname} up")
                 exit(1)
             else:
