@@ -34,25 +34,36 @@ static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 	struct sock *sk = sock->sk;
 	struct protocol_raw_sock *psk = (struct protocol_raw_sock*)sk;
 	struct sk_buff *skb;
+	avionics_data *data;
+	struct timespec64 tv;
 	struct net_device *dev;
 	int err = 0;
 
 	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
-            msg, size, &dev);
+			msg, size, &dev);
 	if (err) {
 		pr_err("avionics-protocol-raw: Can't find device: %d.\n", err);
 		return err;
 	}
 
-	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT, sk, size);
+	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT, sk,
+			size + sizeof(avionics_data));
 	if (!skb) {
 		pr_err("avionics-protocol-raw: Unable to allocate skbuff\n");
 		dev_put(dev);
 		return -ENOMEM;
 	}
 
-    skb_reserve(skb, sizeof(avionics_data));
-	err = memcpy_from_msg(skb->head, msg, size);
+	data = (avionics_data *)skb_put(skb, size + sizeof(avionics_data));
+
+	ktime_get_real_ts64(&tv);
+	data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
+	data->status = 0;
+	data->count = 0;
+	data->width = 0;
+	data->length = size;
+
+	err = memcpy_from_msg(data->data, msg, size);
 	if (err < 0) {
 		pr_err("avionics-protocol-raw: Can't memcpy from msg: %d.\n", err);
 		kfree_skb(skb);
@@ -75,7 +86,6 @@ static int protocol_raw_recvmsg(struct socket *sock,
 	struct sock *sk = sock->sk;
 	struct sk_buff *skb;
 	avionics_data *data;
-	struct timespec64 tv;
 	int err = 0;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,8)
 	int noblock;
@@ -97,14 +107,13 @@ static int protocol_raw_recvmsg(struct socket *sock,
 		size = skb->len;
 	}
 
-    data = kzalloc(sizeof(avionics_data) + size, GFP_KERNEL);
-    memcpy(data->data, skb->data, size);
-    data->length = size;
+	data = (avionics_data *)skb->data;
 
-    ktime_get_real_ts64(&tv);
-    data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
+	if (data->length != (size - sizeof(avionics_data))) {
+		return -EAFNOSUPPORT;
+	}
 
-	err = memcpy_to_msg(msg, data, sizeof(avionics_data) + data->length);
+	err = memcpy_to_msg(msg, data->data, data->length);
 	if (err < 0) {
 		pr_err("avionics-protocol-raw: Failed to copy message data: %d.\n", err);
 		skb_free_datagram(sk, skb);
@@ -125,9 +134,8 @@ static int protocol_raw_recvmsg(struct socket *sock,
 	}
 
 	skb_free_datagram(sk, skb);
-	kfree(data);
 
-	return sizeof(avionics_data) + size;
+	return data->length;
 }
 
 static const struct proto_ops protocol_raw_ops = {
@@ -180,7 +188,7 @@ int protocol_raw_register(void)
 	err = proto_register(&protocol_raw, AVIONICS_PROTO_RAW);
 	if (err) {
 		pr_err("avionics-protocol-raw: Failed to register"
-		       " Raw Protocol: %d\n", err);
+			   " Raw Protocol: %d\n", err);
 		return err;
 	}
 	return 0;
