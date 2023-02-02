@@ -66,7 +66,7 @@ static int protocol_packet_sendmsg(struct socket *sock, struct msghdr *msg,
     if (data->length < (skb->len - sizeof(avionics_data))) {
         skb_trim(skb, data->length + sizeof(avionics_data));
     } else if (data->length > (skb->len - sizeof(avionics_data))) {
-		pr_err("avionics-protocol-packet: sendmsg data length mismatch: %d %d.\n",
+		pr_err("avionics-protocol-packet: sendmsg data length mismatch: %d %ld.\n",
                 data->length, skb->len - sizeof(avionics_data));
 		kfree_skb(skb);
 		dev_put(dev);
@@ -109,7 +109,7 @@ static int protocol_packet_recvmsg(struct socket *sock,
 	data = (avionics_data *)skb->data;
 
 	if (data->length != (skb->len - sizeof(avionics_data))) {
-		pr_err("avionics-protocol-packet: recvmsg data length mismatch: %d %d.\n",
+		pr_err("avionics-protocol-packet: recvmsg data length mismatch: %d %ld.\n",
                 data->length, skb->len - sizeof(avionics_data));
 		return -EAFNOSUPPORT;
 	}
