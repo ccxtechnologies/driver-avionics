@@ -180,4 +180,39 @@ if __name__ == "__main__":
                                                         ).isoformat()
                 print(f"{i:08d}: {ts} 0x{d.value:08x}")
 
+        elif protocol_name == "packet":
+            data_size = ctypes.sizeof(avionics_proto_packet_data)
+            data_length = len(data) - data_size
+
+            d = avionics_proto_packet_data.from_buffer_copy(data[:data_size])
+
+            ts = datetime.datetime.utcfromtimestamp(d.time_msecs / 1000.0
+                                                    ).isoformat()
+            print(f"timestamp: {ts}")
+            print(f"status: 0x{d.status:04x}")
+            print(f"count: {d.count}")
+            print(f"width: {d.width}")
+            print(f"length: {d.length}")
+
+            if d.length != data_length:
+                print(
+                        f"Error: invalid data length {d.length},"
+                        f" expected {data_length}"
+                )
+
+            if d.width == 4:
+                for i in range(data_size, len(data), 4):
+                    d = int.from_bytes(data[i:i + 4], "little")
+                    print(f"{i:08d}: 0x{d:08x}")
+            elif d.width == 2:
+                for i in range(data_size, len(data), 2):
+                    d = int.from_bytes(data[i:i + 2], "little")
+                    print(f"{i:08d}: 0x{d:04x}")
+            elif d.width == 1 or d.width == 0:
+                for i in range(data_size, len(data), 2):
+                    d = int.from_bytes(data[i:i + 2], "little")
+                    print(f"{i:08d}: 0x{d:04x}")
+            else:
+                print(f"Error: invalid data width {d.width}")
+
     print("===============================")
