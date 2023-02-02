@@ -172,7 +172,6 @@ if __name__ == "__main__":
 
                 elif protocol_name == "timestamp":
                     data_size = ctypes.sizeof(avionics_proto_timestamp_data)
-                    print(data_size)
                     for i in range(0, len(data), data_size):
                         d = avionics_proto_timestamp_data.from_buffer_copy(
                                 data[i:i + data_size]

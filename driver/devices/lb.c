@@ -107,7 +107,7 @@ static const struct net_device_ops lb_net_device_ops = {
 static void lb_rtnl_link_setup(struct net_device *dev)
 {
     dev->type       = ARPHRD_AVIONICS;
-    dev->mtu        = sizeof(__u32)*32;
+    dev->mtu        = sizeof(avionics_data) + 2048;
     dev->hard_header_len    = 0;
     dev->addr_len       = 0;
     dev->tx_queue_len   = 0;
