@@ -23,6 +23,7 @@
 #include "protocol-packet.h"
 #include "protocol.h"
 #include "avionics.h"
+#include "avionics-device.h"
 
 /* ====== Packet Protocol ===== */
 
@@ -33,6 +34,7 @@ static int protocol_packet_sendmsg(struct socket *sock, struct msghdr *msg,
 	struct protocol_raw_sock *psk = (struct protocol_raw_sock*)sk;
 	struct sk_buff *skb;
 	struct net_device *dev;
+	avionics_data *data;
 	int err;
 
 	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
@@ -60,10 +62,23 @@ static int protocol_packet_sendmsg(struct socket *sock, struct msghdr *msg,
 		return err;
 	}
 
+	data = (avionics_data *)skb->data;
+    if (data->length < (skb->len - sizeof(avionics_data))) {
+        skb_trim(skb, data->length + sizeof(avionics_data));
+    } else if (data->length > (skb->len - sizeof(avionics_data))) {
+		pr_err("avionics-protocol-packet: sendmsg data length mismatch: %d %d.\n",
+                data->length, skb->len - sizeof(avionics_data));
+		kfree_skb(skb);
+		dev_put(dev);
+        return -EAFNOSUPPORT;
+    }
+
 	err = protocol_send_to_netdev(dev, skb);
 	if (err) {
 		pr_err("avionics-protocol-packet: Failed to send packet: %d.\n",
 		       err);
+		kfree_skb(skb);
+		dev_put(dev);
 		return err;
 	}
 
@@ -75,6 +90,7 @@ static int protocol_packet_recvmsg(struct socket *sock,
 {
 	struct sock *sk = sock->sk;
 	struct sk_buff *skb;
+	avionics_data *data;
 	int err = 0;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,8)
 	int noblock;
@@ -88,6 +104,14 @@ static int protocol_packet_recvmsg(struct socket *sock,
 	if (!skb) {
 		pr_debug("avionics-protocol-packet: No data in receive message\n");
 		return err;
+	}
+
+	data = (avionics_data *)skb->data;
+
+	if (data->length != (skb->len - sizeof(avionics_data))) {
+		pr_err("avionics-protocol-packet: recvmsg data length mismatch: %d %d.\n",
+                data->length, skb->len - sizeof(avionics_data));
+		return -EAFNOSUPPORT;
 	}
 
 	if (size < skb->len) {

@@ -36,7 +36,7 @@ static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
 	struct net_device *dev;
 	avionics_data *data;
 	struct avionics_proto_timestamp_data *buffer;
-	int err, i=0, num_bytes, num_words, sent_bytes=0;
+	int err, i=0, num_bytes, num_words;
 
 	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
 			msg, size, &dev);
@@ -57,7 +57,7 @@ static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
     err = memcpy_from_msg(buffer, msg, size);
     if (err < 0) {
         pr_err("avionics-protocol-timestamp: Can't memcpy from msg: %d.\n", err);
-        kfree_skb(skb);
+        kfree(buffer);
         dev_put(dev);
         return err;
     }
@@ -68,6 +68,7 @@ static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
 				num_bytes + sizeof(avionics_data));
 		if (!skb) {
 			pr_err("avionics-protocol-timestamp: Unable to allocate skbuff\n");
+            kfree(buffer);
 			dev_put(dev);
 			return -ENOMEM;
 		}
@@ -90,6 +91,9 @@ static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
 		err = protocol_send_to_netdev(dev, skb);
 		if (err) {
 			pr_err("avionics-protocol-timestamp: Failed to send packet: %d.\n", err);
+            kfree(buffer);
+            kfree_skb(skb);
+            dev_put(dev);
 			return err;
 		}
 
