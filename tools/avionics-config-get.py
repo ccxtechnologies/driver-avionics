@@ -180,34 +180,13 @@ def link_data_from_msg(message):
     return link_data
 
 
-# =====================================
-
-
-def exit_help():
-    print("==== avionics-config-get.py ====")
-    print("Error: invalid command line arguments")
-    print("== requires two command line arguments, device type, device name")
-    print("== example: avionics-config-get.py a429rx arinc429rx0")
-    exit(1)
-
-
-if __name__ == "__main__":
-
-    if len(sys.argv) != 3:
-        exit_help()
-
-    device_type = sys.argv[1]
-    device_name = sys.argv[2]
-
-    print("==== avionics-config-get.py ====")
-    print(f"-- getting {device_type} config from {device_name}")
-
+def get_device_config(ifname):
     with socket.socket(
             socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE
     ) as sk:
         sk.bind((os.getpid(), 0))
 
-        device_index = net_device_get_index(sk, device_name)
+        device_index = net_device_get_index(sk, ifname)
 
         header = nlmsghdr(
                 ctypes.sizeof(nlmsghdr) + ctypes.sizeof(ifinfomsg),
@@ -241,83 +220,81 @@ if __name__ == "__main__":
             print(f"Error: Wrong device index: {ifinfo.ifi_index}")
             exit(1)
 
-        data = link_data_from_msg(msg)
+        return link_data_from_msg(msg)
 
-        rate = avionics_rate.from_buffer_copy(data[IFLA_AVIONICS_RATE])
-        print(f"Rate = {rate.rate_hz} Hz")
 
-        if device_type == "a429rx":
-            if IFLA_AVIONICS_ARINC429RX not in data:
-                print(
-                        "Error: a429rx configuration info not returned,"
-                        " device type may be wrong"
-                )
-                exit(1)
+# =====================================
 
-            config = avionics_arinc429rx.from_buffer_copy(
-                    data[IFLA_AVIONICS_ARINC429RX]
-            )
 
-            flip_label = config.flags & AVIONICS_ARINC429RX_FLIP_LABEL_BITS
-            sd9_mask = config.flags & AVIONICS_ARINC429RX_FLIP_LABEL_BITS
-            sd10_mask = config.flags & AVIONICS_ARINC429RX_SD10_MASK
-            sd_mask_enable = config.flags & AVIONICS_ARINC429RX_SD_MASK_ENABLE
-            parity_check = config.flags & AVIONICS_ARINC429RX_PARITY_CHECK
-            even_parity = config.flags & AVIONICS_ARINC429RX_EVEN_PARITY
-            filter_enabled = \
-                config.flags & AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE
-            priority_enabled = \
-                config.flags & AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE
-            priority_labels = list(bytes(config.priority_labels))
-            label_filters = list(bytes(config.label_filters))
+def exit_help():
+    print("==== avionics-config-get.py ====")
+    print("Error: invalid command line arguments")
+    print("== requires one command line arguments, device name")
+    print("== example: avionics-config-get.py arinc429rx0")
+    exit(1)
 
-            print(f"Flip Label Bits = {bool(flip_label)}")
 
-            print(f"SD9 Mask = {bool(sd9_mask)}")
-            print(f"SD10 Mask = {bool(sd10_mask)}")
-            print(f"SD Mask Enable = {bool(sd_mask_enable)}")
-            print(f"Parity Check Enabled = {bool(parity_check)}")
-            print(f"Even Parity = {bool(even_parity)}")
-            print(f"Label Filter Enabled = {bool(filter_enabled)}")
-            print(f"Priority Labels Enabled = {bool(priority_enabled)}")
-            print(f"Priority Labels = {priority_labels}")
-            print(f"Label Filters = {label_filters}")
+if __name__ == "__main__":
 
-        elif device_type == "a429tx":
-            if IFLA_AVIONICS_ARINC429TX not in data:
-                print(
-                        "Error: a429tx configuration info not returned,"
-                        " device type may be wrong"
-                )
-                exit(1)
+    if len(sys.argv) != 2:
+        exit_help()
 
-            config = avionics_arinc429tx.from_buffer_copy(
-                    data[IFLA_AVIONICS_ARINC429TX]
-            )
+    device_name = sys.argv[1]
 
-            flip_label = config.flags & AVIONICS_ARINC429TX_FLIP_LABEL_BITS
-            self_test = config.flags & AVIONICS_ARINC429TX_SELF_TEST
-            even_parity = config.flags & AVIONICS_ARINC429TX_EVEN_PARITY
-            set_parity = config.flags & AVIONICS_ARINC429TX_PARITY_SET
+    print("==== avionics-config-get.py ====")
+    print(f"-- getting config from {device_name}")
 
-            print(f"Flip Label Bits = {bool(flip_label)}")
-            print(f"Self Test = {bool(self_test)}")
-            print(f"Even Parity = {bool(even_parity)}")
-            print(f"Set Parity = {bool(set_parity)}")
+    data = get_device_config(device_name)
 
-        elif device_type == "m1553mb":
-            if IFLA_AVIONICS_MIL1553MB not in data:
-                print(
-                        "Error: m1553mb configuration info not returned,"
-                        " device type may be wrong"
-                )
-                exit(1)
+    rate = avionics_rate.from_buffer_copy(data[IFLA_AVIONICS_RATE])
+    print(f"Rate = {rate.rate_hz} Hz")
 
-        else:
-            print(
-                    f"Error: unknown device type {device_type},"
-                    " expecting a429rx, a429tx, or m1553mb"
-            )
-            exit(1)
+    if IFLA_AVIONICS_ARINC429RX in data:
+        config = avionics_arinc429rx.from_buffer_copy(
+                data[IFLA_AVIONICS_ARINC429RX]
+        )
+
+        flip_label = config.flags & AVIONICS_ARINC429RX_FLIP_LABEL_BITS
+        sd9_mask = config.flags & AVIONICS_ARINC429RX_FLIP_LABEL_BITS
+        sd10_mask = config.flags & AVIONICS_ARINC429RX_SD10_MASK
+        sd_mask_enable = config.flags & AVIONICS_ARINC429RX_SD_MASK_ENABLE
+        parity_check = config.flags & AVIONICS_ARINC429RX_PARITY_CHECK
+        even_parity = config.flags & AVIONICS_ARINC429RX_EVEN_PARITY
+        filter_enabled = \
+            config.flags & AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE
+        priority_enabled = \
+            config.flags & AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE
+        priority_labels = list(bytes(config.priority_labels))
+        label_filters = list(bytes(config.label_filters))
+
+        print(f"Flip Label Bits = {bool(flip_label)}")
+
+        print(f"SD9 Mask = {bool(sd9_mask)}")
+        print(f"SD10 Mask = {bool(sd10_mask)}")
+        print(f"SD Mask Enable = {bool(sd_mask_enable)}")
+        print(f"Parity Check Enabled = {bool(parity_check)}")
+        print(f"Even Parity = {bool(even_parity)}")
+        print(f"Label Filter Enabled = {bool(filter_enabled)}")
+        print(f"Priority Labels Enabled = {bool(priority_enabled)}")
+        print(f"Priority Labels = {priority_labels}")
+        print(f"Label Filters = {label_filters}")
+
+    if IFLA_AVIONICS_ARINC429TX in data:
+        config = avionics_arinc429tx.from_buffer_copy(
+                data[IFLA_AVIONICS_ARINC429TX]
+        )
+
+        flip_label = config.flags & AVIONICS_ARINC429TX_FLIP_LABEL_BITS
+        self_test = config.flags & AVIONICS_ARINC429TX_SELF_TEST
+        even_parity = config.flags & AVIONICS_ARINC429TX_EVEN_PARITY
+        set_parity = config.flags & AVIONICS_ARINC429TX_PARITY_SET
+
+        print(f"Flip Label Bits = {bool(flip_label)}")
+        print(f"Self Test = {bool(self_test)}")
+        print(f"Even Parity = {bool(even_parity)}")
+        print(f"Set Parity = {bool(set_parity)}")
+
+    if IFLA_AVIONICS_MIL1553MB in data:
+        ...
 
     print("===============================")
