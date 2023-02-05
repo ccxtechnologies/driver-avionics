@@ -9,6 +9,8 @@ import ctypes
 import struct
 import fcntl
 
+import json
+
 # ===== from linux/rtnetlink.h ========
 RTM_NEWLINK = 16
 RTM_GETLINK = 18
@@ -280,10 +282,10 @@ def set_device_config(ifname, config):
             exit(1)
 
 
-def str_to_bool(string):
+def str_to_flag(string, flg, mask):
     if string in ("true", "True", "1", "yes", "enable"):
-        return True
-    return False
+        return flg | mask
+    return flg & ~(mask)
 
 
 # =====================================
@@ -330,52 +332,121 @@ if __name__ == "__main__":
         ) + bytes(avionics_rate(int(setting_value)))
 
     elif IFLA_AVIONICS_ARINC429RX in data:
+        rx_config = avionics_arinc429rx.from_buffer_copy(
+                data[IFLA_AVIONICS_ARINC429RX]
+        )
+
+        flags = rx_config.flags
+        priority_labels = rx_config.priority_labels
+        label_filters = rx_config.label_filters
+
         if setting_name == "flip-label":
-            ...
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC429RX_FLIP_LABEL_BITS
+            )
+
         elif setting_name == "sd9-mask":
-            ...
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC429RX_SD9_MASK
+            )
         elif setting_name == "sd10-mask":
-            ...
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC429RX_SD10_MASK
+            )
         elif setting_name == "sd-mask-enabled":
-            ...
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC429RX_SD_MASK_ENABLE
+            )
         elif setting_name == "parity-check-enabled":
-            ...
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC429RX_PARITY_CHECK
+            )
         elif setting_name == "even-parity":
-            ...
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC429RX_EVEN_PARITY
+            )
         elif setting_name == "filter-enabled":
-            ...
+            flags = str_to_flag(
+                    setting_value, flags,
+                    AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE
+            )
         elif setting_name == "priority-enabled":
-            ...
+            flags = str_to_flag(
+                    setting_value, flags,
+                    AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE
+            )
         elif setting_name == "priority-labels":
-            ...
+            label_def = ctypes.c_uint8 * 3
+            priority_labels = label_def.from_buffer_copy(
+                    bytes(json.loads(setting_value))
+            )
         elif setting_name == "label-filters":
-            ...
+            label_def = ctypes.c_uint8 * 8
+            label_filters = label_def.from_buffer_copy(
+                    bytes(json.loads(setting_value))
+            )
         else:
             print(
                     f"Error: {setting_name} is not a valid"
                     " setting for an ARINC-429 RX interface"
             )
+            exit(1)
+
+        cfg = bytes(
+                rtattr(
+                        ctypes.sizeof(rtattr) +
+                        ctypes.sizeof(avionics_arinc429rx),
+                        IFLA_AVIONICS_ARINC429RX
+                )
+        ) + bytes(
+                avionics_arinc429rx(flags, 0, priority_labels, label_filters)
+        )
 
     elif IFLA_AVIONICS_ARINC429TX in data:
+        tx_config = avionics_arinc429tx.from_buffer_copy(
+                data[IFLA_AVIONICS_ARINC429TX]
+        )
+
+        flags = tx_config.flags
+
         if setting_name == "flip-label":
-            ...
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC429TX_FLIP_LABEL_BITS
+            )
         elif setting_name == "self-test":
-            ...
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC429TX_SELF_TEST
+            )
         elif setting_name == "even-parity":
-            ...
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC429TX_EVEN_PARITY
+            )
         elif setting_name == "set-parity":
-            ...
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC429TX_PARITY_SET
+            )
         else:
             print(
                     f"Error: {setting_name} is not a valid"
                     " setting for an ARINC-429 TX interface"
             )
+            exit(1)
+
+        padding_def = ctypes.c_uint8 * 3
+        cfg = bytes(
+                rtattr(
+                        ctypes.sizeof(rtattr) +
+                        ctypes.sizeof(avionics_arinc429tx),
+                        IFLA_AVIONICS_ARINC429TX
+                )
+        ) + bytes(avionics_arinc429tx(flags, padding_def()))
 
     elif IFLA_AVIONICS_MIL1553MB in data:
         print(
                 f"Error: {setting_name} is not a valid"
                 " setting for an MIL-1553 MB interface"
         )
+        exit(1)
 
     set_device_config(device_name, cfg)
 
