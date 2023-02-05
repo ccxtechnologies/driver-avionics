@@ -223,6 +223,63 @@ def get_device_config(ifname):
         return link_data_from_msg(msg)
 
 
+def set_device_config(ifname, config):
+    with socket.socket(
+            socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE
+    ) as sk:
+        sk.bind((os.getpid(), 0))
+
+        index = net_device_get_index(sk, ifname)
+
+        info_data = bytes(
+                rtattr(ctypes.sizeof(rtattr) + len(config), IFLA_INFO_DATA)
+        ) + config
+
+        kind = b"avionics\x00\x00\x00\x00"
+        info_kind = bytes(
+                rtattr(ctypes.sizeof(rtattr) + len(kind), IFLA_INFO_KIND)
+        ) + kind
+
+        command = bytes(
+                rtattr(
+                        ctypes.sizeof(rtattr) + len(info_kind) +
+                        len(info_data), IFLA_LINKINFO
+                )
+        ) + info_kind + info_data
+
+        sk.send(
+                bytes(
+                        nlmsghdr(
+                                ctypes.sizeof(nlmsghdr) +
+                                ctypes.sizeof(ifinfomsg) +
+                                len(command), RTM_NEWLINK, NLM_F_REQUEST
+                                | NLM_F_ACK, 0, 0
+                        )
+                ) + bytes(ifinfomsg(0, 0, 0, index, IFF_UP, IFF_UP)) + command
+        )
+
+        msg = sk.recv(65535)
+
+        header = nlmsghdr.from_buffer_copy(msg[:ctypes.sizeof(nlmsghdr)])
+
+        if (header.nlmsg_len != len(msg)):
+            print(
+                    "Error: incorrect message"
+                    f" length {header.nlmsg_len}, {len(msg)}"
+            )
+            exit(1)
+
+        msg = msg[ctypes.sizeof(nlmsghdr):]
+
+        if header.nlmsg_type == NLMSG_ERROR:
+            msgerr = nlmsgerr.from_buffer_copy(msg[:ctypes.sizeof(nlmsgerr)])
+
+            if msgerr.error:
+                print(f"Error: {msgerr.error} from {msgerr.msg.nlmsg_type}")
+
+            exit(1)
+
+
 def str_to_bool(string):
     if string in ("true", "True", "1", "yes", "enable"):
         return True
@@ -265,7 +322,12 @@ if __name__ == "__main__":
         if rate.rate_hz == int(setting_value):
             exit(0)
 
-        data = bytes(avionics_rate(int(setting_value)))
+        cfg = bytes(
+                rtattr(
+                        ctypes.sizeof(rtattr) + ctypes.sizeof(avionics_rate),
+                        IFLA_AVIONICS_RATE
+                )
+        ) + bytes(avionics_rate(int(setting_value)))
 
     elif IFLA_AVIONICS_ARINC429RX in data:
         if setting_name == "flip-label":
@@ -314,5 +376,7 @@ if __name__ == "__main__":
                 f"Error: {setting_name} is not a valid"
                 " setting for an MIL-1553 MB interface"
         )
+
+    set_device_config(device_name, cfg)
 
     print("===============================")
