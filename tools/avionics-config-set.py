@@ -365,7 +365,7 @@ if __name__ == "__main__":
             flags = str_to_flag(
                     setting_value, flags, AVIONICS_ARINC429RX_EVEN_PARITY
             )
-        elif setting_name == "filter-enabled":
+        elif setting_name == "filters-enabled":
             flags = str_to_flag(
                     setting_value, flags,
                     AVIONICS_ARINC429RX_LABEL_FILTER_ENABLE
@@ -381,7 +381,7 @@ if __name__ == "__main__":
                     bytes(json.loads(setting_value))
             )
         elif setting_name == "label-filters":
-            label_def = ctypes.c_uint8 * 8
+            label_def = ctypes.c_uint8 * 32
             label_filters = label_def.from_buffer_copy(
                     bytes(json.loads(setting_value))
             )

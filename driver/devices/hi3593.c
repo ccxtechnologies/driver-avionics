@@ -126,13 +126,13 @@ struct hi3593_priv {
 	struct workqueue_struct *wq;
 	struct delayed_work worker;
 	int irq;
-	__u8 even_parity;
-	__u8 check_parity;
 	atomic_t *rx_enabled;
 	int rate;
 	unsigned long rx_udelay_min;
 	unsigned long rx_udelay_max;
 	unsigned long rx_wrk_delay;
+	struct avionics_arinc429rx rx_config;
+	struct avionics_arinc429tx tx_config;
 
 	/* rx worker spi transfers, used to optimize spi transfers */
 	__u8 rx_spi_rx_buffer[HI3593_MAX_SPI_BUFSIZE];
@@ -287,7 +287,7 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 		pr_err("avionics-hi3593: Failed to get rx cntrl: %zd\n",
 			   status);
 	} else {
-		config->flags = (status&0xfe) | priv->even_parity;
+		config->flags = status;
 	}
 
 	if (priv->rx_index == 0) {
@@ -314,6 +314,8 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 		pr_err("avionics-hi3593: Failed to get rx label filters: %d\n",
 			   err);
 	}
+
+	memcpy(&priv->rx_config, config, sizeof(struct avionics_arinc429rx));
 }
 
 static int hi3593_set_arinc429rx(struct avionics_arinc429rx *config,
@@ -335,17 +337,7 @@ static int hi3593_set_arinc429rx(struct avionics_arinc429rx *config,
 		return err;
 	}
 
-	if(config->flags & AVIONICS_ARINC429RX_EVEN_PARITY) {
-		priv->even_parity = AVIONICS_ARINC429RX_EVEN_PARITY;
-	} else {
-		priv->even_parity = 0;
-	}
-
-	if(config->flags & AVIONICS_ARINC429RX_PARITY_CHECK) {
-		priv->check_parity = AVIONICS_ARINC429RX_PARITY_CHECK;
-	} else {
-		priv->check_parity = 0;
-	}
+	memcpy(&priv->rx_config, config, sizeof(struct avionics_arinc429rx));
 
 	if (priv->rx_index == 0) {
 		wr_priority[0] = HI3593_OPCODE_WR_RX1_PRIORITY;
@@ -396,6 +388,7 @@ static void hi3593_get_arinc429tx(struct avionics_arinc429tx *config,
 		config->flags = status&0xfe;
 	}
 
+	memcpy(&priv->tx_config, config, sizeof(struct avionics_arinc429tx));
 }
 
 static int hi3593_set_arinc429tx(struct avionics_arinc429tx *config,
@@ -409,6 +402,8 @@ static int hi3593_set_arinc429tx(struct avionics_arinc429tx *config,
 		pr_err("avionics-hi3593: Failed to get private data\n");
 		return -ENODEV;
 	}
+
+	memcpy(&priv->tx_config, config, sizeof(struct avionics_arinc429tx));
 
 	err = hi3593_set_cntrl(priv, config->flags | HI3593_TX_CNTRL_TMODE,
 				   0x5c | HI3593_TX_CNTRL_TMODE);
@@ -679,6 +674,13 @@ static void hi3593_empty_fifo(struct hi3593_priv *priv)
 
 }
 
+__u8 reverse(__u8 b) {
+	b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+	b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+	b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+	return b;
+}
+
 static void hi3593_rx_worker(struct work_struct *work)
 {
 	struct net_device *dev;
@@ -688,7 +690,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 	struct timespec64 tv;
 	avionics_data *data;
 	__u8 status_cmd, rd_cmd, buffer[sizeof(__u32)];
-	__u8 pl_cmd[3], pl_rd, pl[3];
+	__u8 pl_cmd[3], *pl;
 	const __u8 pl_bits[3] = {
 		HI3593_PRIORITY_LABEL1,
 		HI3593_PRIORITY_LABEL2,
@@ -696,11 +698,18 @@ static void hi3593_rx_worker(struct work_struct *work)
 	};
 	ssize_t status;
 	int err, i;
+	__u8 even_parity, check_parity, priority_enabled, flip_labels;
 
 	priv = container_of((struct delayed_work*)work,
 				struct hi3593_priv, worker);
 	dev = priv->dev;
 	stats = &dev->stats;
+
+	even_parity = priv->rx_config.flags & AVIONICS_ARINC429RX_EVEN_PARITY;
+	check_parity = priv->rx_config.flags & AVIONICS_ARINC429RX_PARITY_CHECK;
+	priority_enabled =
+		priv->rx_config.flags & AVIONICS_ARINC429RX_PRIORITY_LABEL_ENABLE;
+	flip_labels = priv->rx_config.flags & AVIONICS_ARINC429RX_FLIP_LABEL_BITS;
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
@@ -711,17 +720,9 @@ static void hi3593_rx_worker(struct work_struct *work)
 	if (priv->rx_index == 0) {
 		rd_cmd = HI3593_OPCODE_RD_RX1_FIFO;
 		status_cmd = HI3593_OPCODE_RD_RX1_STATUS;
-		pl_cmd[0] = HI3593_OPCODE_RD_RX1_PL1;
-		pl_cmd[1] = HI3593_OPCODE_RD_RX1_PL2;
-		pl_cmd[2] = HI3593_OPCODE_RD_RX1_PL3;
-		pl_rd = HI3593_OPCODE_RD_RX1_PRIORITY;
 	} else if (priv->rx_index == 1) {
 		rd_cmd = HI3593_OPCODE_RD_RX2_FIFO;
 		status_cmd = HI3593_OPCODE_RD_RX2_STATUS;
-		pl_cmd[0] = HI3593_OPCODE_RD_RX2_PL1;
-		pl_cmd[1] = HI3593_OPCODE_RD_RX2_PL2;
-		pl_cmd[2] = HI3593_OPCODE_RD_RX2_PL3;
-		pl_rd = HI3593_OPCODE_RD_RX2_PRIORITY;
 	} else {
 		pr_err("avionics-hi3593: No valid port index\n");
 		return;
@@ -748,61 +749,71 @@ static void hi3593_rx_worker(struct work_struct *work)
 		stats->rx_fifo_errors++;
 	}
 
-	if (status & (pl_bits[0] | pl_bits[1] | pl_bits[2])) {
-		err = hi3593_rx_worker_spi_write_then_read(priv,
-				&pl_rd, sizeof(pl_rd), pl, sizeof(pl));
-		if (unlikely(err)) {
-			pr_err("avionics-hi3593: Failed to read priority labels\n");
-			goto done;
+	if (priority_enabled) {
+		pl = &(priv->rx_config.priority_labels[0]);
+
+		if (priv->rx_index == 0) {
+			pl_cmd[0] = HI3593_OPCODE_RD_RX1_PL1;
+			pl_cmd[1] = HI3593_OPCODE_RD_RX1_PL2;
+			pl_cmd[2] = HI3593_OPCODE_RD_RX1_PL3;
+		} else if (priv->rx_index == 1) {
+			pl_cmd[0] = HI3593_OPCODE_RD_RX2_PL1;
+			pl_cmd[1] = HI3593_OPCODE_RD_RX2_PL2;
+			pl_cmd[2] = HI3593_OPCODE_RD_RX2_PL3;
 		}
-	}
 
-	for (i = 0; i < 3; i++) {
-		if (status & pl_bits[i]) {
-			buffer[3] = pl[2-i];
-			err = hi3593_rx_worker_spi_write_then_read(priv, &pl_cmd[i],
-						  sizeof(pl_cmd[0]), buffer, sizeof(buffer) - 1);
-
-			if (unlikely(err)) {
-				pr_err("avionics-hi3593: Failed to"
-					   " read priority label\n");
-				goto done;
-			}
-
-			if(!priv->check_parity ||
-			   (priv->even_parity && (0x80&buffer[0])) ||
-			   ((0x80&buffer[0]) == 0x00)) {
-
-				if (priv->check_parity && priv->even_parity) {
-					buffer[0] &= 0x7f;
+		for (i = 0; i < 3; i++) {
+			if (status & pl_bits[i]) {
+				if (flip_labels) {
+					buffer[3] = pl[2-i];
+				} else {
+					buffer[3] = reverse(pl[2-i]);
 				}
+				err = hi3593_rx_worker_spi_write_then_read(priv, &pl_cmd[i],
+							  sizeof(pl_cmd[0]), buffer, sizeof(buffer) - 1);
 
-				skb = avionics_device_alloc_skb(dev, sizeof(avionics_data) + data->width);
-				if (unlikely(!skb)) {
+				if (unlikely(err)) {
 					pr_err("avionics-hi3593: Failed to"
-						   " allocate RX buffer\n");
+						   " read priority label\n");
 					goto done;
 				}
 
-				ktime_get_real_ts64(&tv);
-				data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
-				data->length = data->width;
-				memcpy(&data->data[0], buffer, data->length);
+				if(!check_parity ||
+				   (even_parity && (0x80&buffer[0])) ||
+				   ((0x80&buffer[0]) == 0x00)) {
 
-				skb_copy_to_linear_data(skb, data, sizeof(avionics_data) + data->length);
+					if (check_parity && even_parity) {
+						buffer[0] &= 0x7f;
+					}
 
-				stats->rx_packets++;
-				stats->rx_bytes += skb->len;
+					skb = avionics_device_alloc_skb(dev, sizeof(avionics_data) + data->width);
+					if (unlikely(!skb)) {
+						pr_err("avionics-hi3593: Failed to"
+							   " allocate RX buffer\n");
+						goto done;
+					}
+
+					ktime_get_real_ts64(&tv);
+					data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
+					data->length = data->width;
+					memcpy(&data->data[0], buffer, data->length);
+
+					skb_copy_to_linear_data(skb, data, sizeof(avionics_data) + data->length);
+
+					stats->rx_packets++;
+					stats->rx_bytes += skb->len;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,0)
-				netif_rx_ni(skb);
+					netif_rx_ni(skb);
 #else
-				netif_rx(skb);
+					netif_rx(skb);
 #endif
-			} else {
-				stats->rx_errors++;
-				stats->rx_crc_errors++;
+				} else {
+					stats->rx_errors++;
+					stats->rx_crc_errors++;
+				}
 			}
 		}
+
 	}
 
 	while (!(status & HI3593_FIFO_EMPTY)) {
@@ -819,11 +830,11 @@ static void hi3593_rx_worker(struct work_struct *work)
 				goto done;
 			}
 
-			if(!priv->check_parity ||
-			   (priv->even_parity && (0x80&buffer[0])) ||
+			if(!check_parity ||
+			   (even_parity && (0x80&buffer[0])) ||
 			   ((0x80&buffer[0]) == 0x00)) {
 
-				if (priv->check_parity && priv->even_parity) {
+				if (check_parity && even_parity) {
 					buffer[0] &= 0x7f;
 				}
 
