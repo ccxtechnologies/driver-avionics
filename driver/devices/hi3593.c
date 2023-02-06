@@ -1035,12 +1035,6 @@ static netdev_tx_t hi3593_tx_start_xmit(struct sk_buff *skb,
 		return NETDEV_TX_OK;
 	}
 
-	if (unlikely(skb->len % sizeof(avionics_data))) {
-		kfree_skb(skb);
-		stats->tx_dropped++;
-		return NETDEV_TX_OK;
-	}
-
 	priv = avionics_device_priv(dev);
 	if (!priv) {
 		pr_err("avionics-hi3593: Failed to get private data\n");
