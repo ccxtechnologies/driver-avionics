@@ -13,22 +13,22 @@ create new, unique socket indexes.
 
 # Interfacing with the Driver
 
-These drivers use netlink for configuration and raw sockets for data transfers. Refer to the Python test scripts
+These drivers use netlink for configuration and raw sockets for data transfers. Refer to the Python tools
 for examples.
 
-You will have to include the avionics.h header file in your user space applications that interface with this driver
+You will have to include the avionics.h header file with userspace applications that interface with this driver
 to get the protocol indexes and data formats.
 
-These drivers support a raw protcol and a timestamp protocol which utalize different base datatypes.
+These drivers support a raw protcol and a timestamp protocol and a packetized protocol.
 
 ## Raw Protocol
 
-The raw protocol transmits and receives a set of 32-bit words. All transmit data will be immediatly written, receive
+The raw protocol transmits and receives raw bytes. All transmit data will be immediatly written, receive
 data may be buffered internally for some time so the receive time may vary from the capture time.
 
 ## Timestamp Protocol
 
-The timestamp protocol transmits and receives a set of 32-bit words plus a milli-second epoch time counter.
+The timestamp protocol transmits and receives 32-bit words plus a milli-second epoch time counter.
 
 The time counter on all received data will be set to the processor's capture time, this may vary somewhat from the
 time the data was received from the databus but shoud be within 3 ms.
@@ -40,8 +40,12 @@ read from the device at the same time.
 If the time counter on transmit data will be used to delay the data until the epoch time that is set. If the setting
 is less than the current time, or greater than 6 minutes in the future the data will be sent immediatly.
 
-## Header Protocol
+## Packet Protocol
 
+The packet protocol includes a block of data along with an associated timestamp and optional counters and
+status words.
+
+The counter and status words will depend on the underlying bus that the data was received from or transmitted to.
 
 # Kernel Version
 
