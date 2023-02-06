@@ -1,5 +1,5 @@
 /*
- * Copyright (C), 2019-2023 CCX Technologies
+ * Copyright (C), 2023 CCX Technologies
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -15,72 +15,77 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <linux/time.h>
 #include <linux/net.h>
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
 #include <net/sock.h>
 
-#include "protocol-raw.h"
+#include "protocol-packet.h"
 #include "protocol.h"
 #include "avionics.h"
 #include "avionics-device.h"
 
-/* ====== Raw Protocol ===== */
+/* ====== Packet Protocol ===== */
 
-static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
-				size_t size)
+static int protocol_packet_sendmsg(struct socket *sock, struct msghdr *msg,
+		size_t size)
 {
 	struct sock *sk = sock->sk;
 	struct protocol_raw_sock *psk = (struct protocol_raw_sock*)sk;
 	struct sk_buff *skb;
-	avionics_data *data;
-	struct timespec64 tv;
 	struct net_device *dev;
-	int err = 0;
+	avionics_data *data;
+	int err;
 
 	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
-			msg, size, &dev);
+					msg, size, &dev);
 	if (err) {
-		pr_err("avionics-protocol-raw: Can't find device: %d.\n", err);
+		pr_err("avionics-protocol-packet: Can't find device: %d.\n", err);
 		return err;
 	}
 
-	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT, sk,
-			size + sizeof(avionics_data));
+	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT,
+				      sk, size);
+
 	if (!skb) {
-		pr_err("avionics-protocol-raw: Unable to allocate skbuff\n");
+		pr_err("avionics-protocol-packet: Unable to allocate skbuff\n");
 		dev_put(dev);
 		return -ENOMEM;
 	}
 
-	data = (avionics_data *)skb_put(skb, size + sizeof(avionics_data));
-
-	ktime_get_real_ts64(&tv);
-	data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
-	data->status = 0;
-	data->count = 0;
-	data->width = 0;
-	data->length = size;
-
-	err = memcpy_from_msg(data->data, msg, size);
+	err = memcpy_from_msg(skb_put(skb, size), msg, size);
 	if (err < 0) {
-		pr_err("avionics-protocol-raw: Can't memcpy from msg: %d.\n", err);
+		pr_err("avionics-protocol-packet: Can't memcpy from msg: %d.\n",
+		       err);
 		kfree_skb(skb);
 		dev_put(dev);
 		return err;
 	}
 
+	data = (avionics_data *)skb->data;
+    if (data->length < (skb->len - sizeof(avionics_data))) {
+        skb_trim(skb, data->length + sizeof(avionics_data));
+    } else if (data->length > (skb->len - sizeof(avionics_data))) {
+		pr_err("avionics-protocol-packet: sendmsg data length mismatch: %d %ld.\n",
+                data->length, skb->len - sizeof(avionics_data));
+		kfree_skb(skb);
+		dev_put(dev);
+        return -EAFNOSUPPORT;
+    }
+
 	err = protocol_send_to_netdev(dev, skb);
 	if (err) {
-		pr_err("avionics-protocol-raw: Failed to send packet: %d.\n", err);
+		pr_err("avionics-protocol-packet: Failed to send packet: %d.\n",
+		       err);
+		kfree_skb(skb);
+		dev_put(dev);
 		return err;
 	}
 
 	return size;
 }
 
-static int protocol_raw_recvmsg(struct socket *sock,
+static int protocol_packet_recvmsg(struct socket *sock,
 				struct msghdr *msg, size_t size, int flags)
 {
 	struct sock *sk = sock->sk;
@@ -97,27 +102,28 @@ static int protocol_raw_recvmsg(struct socket *sock,
 	skb = skb_recv_datagram(sk, flags, &err);
 #endif
 	if (!skb) {
-		pr_debug("avionics-protocol-raw: No data in receive message\n");
-		return -ENOMEM;
+		pr_debug("avionics-protocol-packet: No data in receive message\n");
+		return err;
 	}
 
 	data = (avionics_data *)skb->data;
 
 	if (data->length != (skb->len - sizeof(avionics_data))) {
+		pr_err("avionics-protocol-packet: recvmsg data length mismatch: %d %ld.\n",
+                data->length, skb->len - sizeof(avionics_data));
 		return -EAFNOSUPPORT;
 	}
 
-	if (size < data->length) {
+	if (size < skb->len) {
 		msg->msg_flags |= MSG_TRUNC;
 	} else {
-		size = data->length;
+		size = skb->len;
 	}
 
-	err = memcpy_to_msg(msg, data->data, data->length);
+	err = memcpy_to_msg(msg, skb->data, size);
 	if (err < 0) {
-		pr_err("avionics-protocol-raw: Failed to copy message data: %d.\n", err);
+		pr_err("avionics-protocol-packet: Failed to copy message data.\n");
 		skb_free_datagram(sk, skb);
-		kfree(data);
 		return err;
 	}
 
@@ -138,7 +144,7 @@ static int protocol_raw_recvmsg(struct socket *sock,
 	return size;
 }
 
-static const struct proto_ops protocol_raw_ops = {
+static const struct proto_ops protocol_packet_ops = {
 	.owner		= THIS_MODULE,
 	.family		= PF_AVIONICS,
 
@@ -156,8 +162,8 @@ static const struct proto_ops protocol_raw_ops = {
 
 	.poll		= datagram_poll,
 
-	.sendmsg	= protocol_raw_sendmsg,
-	.recvmsg	= protocol_raw_recvmsg,
+	.sendmsg	= protocol_packet_sendmsg,
+	.recvmsg	= protocol_packet_recvmsg,
 
 	.bind		= protocol_bind,
 	.release	= protocol_release,
@@ -165,36 +171,36 @@ static const struct proto_ops protocol_raw_ops = {
 	.ioctl		= protocol_ioctl,
 };
 
-static struct proto protocol_raw = {
-	.name		= "AVIONICS_RAW",
+static struct proto protocol_packet = {
+	.name		= "AVIONICS_PACKET",
 	.owner		= THIS_MODULE,
 	.obj_size	= sizeof(struct protocol_sock),
 };
 
-const struct proto_ops* protocol_raw_get_ops(void)
+const struct proto_ops* protocol_packet_get_ops(void)
 {
-	return &protocol_raw_ops;
+	return &protocol_packet_ops;
 }
 
-struct proto * protocol_raw_get(void)
+struct proto * protocol_packet_get(void)
 {
-	return &protocol_raw;
+	return &protocol_packet;
 }
 
-int protocol_raw_register(void)
+int protocol_packet_register(void)
 {
 	int err;
 
-	err = proto_register(&protocol_raw, AVIONICS_PROTO_RAW);
+	err = proto_register(&protocol_packet, AVIONICS_PROTO_PACKET);
 	if (err) {
-		pr_err("avionics-protocol-raw: Failed to register"
-			   " Raw Protocol: %d\n", err);
+		pr_err("avionics-protocol-packet: Failed to register"
+		       " Packet Protocol: %d\n", err);
 		return err;
 	}
 	return 0;
 }
 
-void protocol_raw_unregister(void)
+void protocol_packet_unregister(void)
 {
-	proto_unregister(&protocol_raw);
+	proto_unregister(&protocol_packet);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C), 2019 CCX Technologies
+ * Copyright (C), 2019-2023 CCX Technologies
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -23,6 +23,7 @@
 #include "protocol-timestamp.h"
 #include "protocol.h"
 #include "avionics.h"
+#include "avionics-device.h"
 
 /* ====== Timestamp Protocol ===== */
 
@@ -33,39 +34,72 @@ static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
 	struct protocol_raw_sock *psk = (struct protocol_raw_sock*)sk;
 	struct sk_buff *skb;
 	struct net_device *dev;
-	int err;
+	avionics_data *data;
+	struct avionics_proto_timestamp_data *buffer;
+	int err, i=0, num_bytes, num_words;
 
 	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
-					msg, size, &dev);
+			msg, size, &dev);
 	if (err) {
-		pr_err("avionics-protocol-raw: Can't find device: %d.\n", err);
+		pr_err("avionics-protocol-timestamp: Can't find device: %d.\n", err);
 		return err;
 	}
 
-	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT,
-				      sk, size);
+	num_words = size/sizeof(struct avionics_proto_timestamp_data);
+	num_bytes = num_words*sizeof(__u32);
 
-	if (!skb) {
-		pr_err("avionics-protocol-raw: Unable to allocate skbuff\n");
-		dev_put(dev);
+	buffer = kzalloc(size, GFP_KERNEL);
+	if (buffer == NULL) {
+		pr_err("avionics-protocol-timestamp: Failed to allocate buffer.\n");
 		return -ENOMEM;
 	}
 
-	err = memcpy_from_msg(skb_put(skb, size), msg, size);
-	if (err < 0) {
-		pr_err("avionics-protocol-raw: Can't memcpy from msg: %d.\n",
-		       err);
-		kfree_skb(skb);
-		dev_put(dev);
-		return err;
+    err = memcpy_from_msg(buffer, msg, size);
+    if (err < 0) {
+        pr_err("avionics-protocol-timestamp: Can't memcpy from msg: %d.\n", err);
+        kfree(buffer);
+        dev_put(dev);
+        return err;
+    }
+
+	while(i < num_words) {
+
+		skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT, sk,
+				num_bytes + sizeof(avionics_data));
+		if (!skb) {
+			pr_err("avionics-protocol-timestamp: Unable to allocate skbuff\n");
+            kfree(buffer);
+			dev_put(dev);
+			return -ENOMEM;
+		}
+
+        data = (avionics_data *)skb->head;
+        data->time_msecs = buffer[i].time_msecs;
+        data->status = 0;
+        data->count = i;
+        data->width = 4;
+        data->length = 4;
+        memcpy(&data->data[0], &(buffer[i].value), 4);
+
+        for (i++ ; (i < num_words) && (buffer[i-1].time_msecs == buffer[i].time_msecs); i++) {
+            memcpy(&data->data[data->length], &(buffer[i].value), 4);
+            data->length += 4;
+        }
+
+		skb_put(skb, data->length + sizeof(avionics_data));
+
+		err = protocol_send_to_netdev(dev, skb);
+		if (err) {
+			pr_err("avionics-protocol-timestamp: Failed to send packet: %d.\n", err);
+            kfree(buffer);
+            kfree_skb(skb);
+            dev_put(dev);
+			return err;
+		}
+
 	}
 
-	err = protocol_send_to_netdev(dev, skb);
-	if (err) {
-		pr_err("avionics-protocol-raw: Failed to send packet: %d.\n",
-		       err);
-		return err;
-	}
+	kfree(buffer);
 
 	return size;
 }
@@ -75,7 +109,9 @@ static int protocol_timestamp_recvmsg(struct socket *sock,
 {
 	struct sock *sk = sock->sk;
 	struct sk_buff *skb;
-	int err = 0;
+	avionics_data *data;
+	struct avionics_proto_timestamp_data *buffer;
+	int err = 0, num_words, num_bytes, i;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,8)
 	int noblock;
 
@@ -90,18 +126,44 @@ static int protocol_timestamp_recvmsg(struct socket *sock,
 		return err;
 	}
 
-	if (size < skb->len) {
-		msg->msg_flags |= MSG_TRUNC;
-	} else {
-		size = skb->len;
+	data = (avionics_data *)skb->data;
+
+	if (data->length != (skb->len - sizeof(avionics_data))) {
+		return -EAFNOSUPPORT;
 	}
 
-	err = memcpy_to_msg(msg, skb->data, size);
+	if(data->width == 0) {
+		data->width = 4;
+	}
+
+	num_words = data->length/data->width;
+	num_bytes = sizeof(struct avionics_proto_timestamp_data)*num_words;
+
+	if (size < num_bytes) {
+		msg->msg_flags |= MSG_TRUNC;
+	} else {
+		size = num_bytes;
+	}
+
+	buffer = kzalloc(num_bytes, GFP_KERNEL);
+	if (buffer == NULL) {
+		pr_err("avionics-protocol-timestamp: Failed to allocate buffer.\n");
+		return -ENOMEM;
+	}
+
+	for(i = 0; i < num_words; i++) {
+		buffer[i].time_msecs = data->time_msecs;
+		memcpy(&buffer[i].value, &data->data[i*data->width], data->width);
+	}
+
+	err = memcpy_to_msg(msg, buffer, num_bytes);
 	if (err < 0) {
 		pr_err("avionics-protocol-timestamp: Failed to copy message data.\n");
 		skb_free_datagram(sk, skb);
 		return err;
 	}
+
+	kfree(buffer);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,19,0)
 	sock_recv_ts_and_drops(msg, sk, skb);
@@ -170,7 +232,7 @@ int protocol_timestamp_register(void)
 	err = proto_register(&protocol_timestamp, AVIONICS_PROTO_TIMESTAMP);
 	if (err) {
 		pr_err("avionics-protocol-timestamp: Failed to register"
-		       " Timestamp Protocol: %d\n", err);
+			   " Timestamp Protocol: %d\n", err);
 		return err;
 	}
 	return 0;

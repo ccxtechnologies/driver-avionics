@@ -1,5 +1,5 @@
 /*
- * Copyright (C), 2019 CCX Technologies
+ * Copyright (C), 2019-2023 CCX Technologies
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -25,6 +25,7 @@
 
 #include "protocol-raw.h"
 #include "protocol-timestamp.h"
+#include "protocol-packet.h"
 #include "socket-list.h"
 #include "avionics.h"
 #include "device.h"
@@ -32,7 +33,7 @@
 MODULE_DESCRIPTION("Avionics Networking Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
-MODULE_VERSION("1.0.1");
+MODULE_VERSION("1.1.0");
 
 MODULE_ALIAS_NETPROTO(PF_AVIONICS);
 
@@ -65,6 +66,11 @@ static int avionics_sock_create(struct net *net, struct socket *sock,
 	case AVIONICS_PROTO_TIMESTAMP:
 		popts = protocol_timestamp_get_ops();
 		p = protocol_timestamp_get();
+		break;
+
+	case AVIONICS_PROTO_PACKET:
+		popts = protocol_packet_get_ops();
+		p = protocol_packet_get();
 		break;
 
 	default:

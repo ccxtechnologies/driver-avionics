@@ -25,6 +25,7 @@
 #include <linux/of_gpio.h>
 #include <linux/of_irq.h>
 #include <linux/interrupt.h>
+#include <linux/time.h>
 #include <linux/version.h>
 
 #include "avionics.h"
@@ -77,7 +78,7 @@ MODULE_VERSION("1.0.0");
 #define HI6138_REG_SMTLAST		0x0031
 #define HI6138_REG_SMTCNT		0x003a
 
-#define HI6138_REG_SMTCFG		0x0029
+#define HI6138_REG_SMTCFG			0x0029
 #define HI6138_REG_SMTCFG_MTTO_LONG	(3<<14)
 #define HI6138_REG_SMTCFG_MTSRR_ANY	(3<<5)
 #define HI6138_REG_SMTCFG_MTCRIW	(1<<4)
@@ -89,6 +90,12 @@ MODULE_VERSION("1.0.0");
 #define HI6138_REG_MEMPTRD		0x000e
 
 #define HI6138_REG_MCFG2		0x004e
+
+#define HI6138_REG_TIME_TAG_CFG			0x0039
+#define HI6138_REG_TIME_TAG_CFG_MTTCK0	(1<<4)
+#define HI6138_REG_TIME_TAG_CFG_MTTCK1	(1<<5)
+#define HI6138_REG_TIME_TAG_CFG_MTTCK2	(1<<6)
+#define HI6138_REG_TIME_TAG_CFG_MTTCK3	(1<<7)
 
 #define HI6138_OPCODE_ENABLE_MEMPTRA	0xd8
 #define HI6138_OPCODE_ENABLE_MEMPTRB	0xd9
@@ -185,11 +192,11 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 		return err;
 	}
 
-    buffer = kmalloc(1 + sizeof(vbuffer)*length, GFP_KERNEL);
-    if (buffer == NULL) {
+	buffer = kmalloc(1 + sizeof(vbuffer)*length, GFP_KERNEL);
+	if (buffer == NULL) {
 		pr_err("avionics-hi6138: Failed to allocate memory\n");
-        return -ENOMEM;
-    }
+		return -ENOMEM;
+	}
 
 	buffer[0] = HI6138_OPCODE_WRITE_MEMPTR;
 	for(i = 0; i < length; i++) {
@@ -201,11 +208,11 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to write to memory at 0x%x\n",
 			   address);
-         kvfree(buffer);
+		 kvfree(buffer);
 		return err;
 	}
 
-    kvfree(buffer);
+	kvfree(buffer);
 	return 0;
 }
 
@@ -224,18 +231,18 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
 		return err;
 	}
 
-    buffer = kmalloc(sizeof(vbuffer)*length, GFP_KERNEL);
-    if (buffer == NULL) {
+	buffer = kmalloc(sizeof(vbuffer)*length, GFP_KERNEL);
+	if (buffer == NULL) {
 		pr_err("avionics-hi6138: Failed to allocate memory\n");
-        return -ENOMEM;
-    }
+		return -ENOMEM;
+	}
 
 	err = spi_write_then_read(spi, &cmd, sizeof(cmd),
 				  buffer, sizeof(vbuffer)*length);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to read from memory at 0x%x\n",
 			   address);
-        kvfree(buffer);
+		kvfree(buffer);
 		return err;
 	}
 
@@ -244,7 +251,7 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
 		value[i] = be16_to_cpu(vbuffer);
 	}
 
-    kvfree(buffer);
+	kvfree(buffer);
 	return 0;
 }
 
@@ -253,7 +260,7 @@ static int hi6138_get_reg(struct spi_device *spi, __u16 address, __u16 *value)
 	return hi6138_get_mem(spi, address, value, 1);
 }
 
-static int hi6138_set_reg(struct spi_device *spi, __u16 address, __u16 value)
+__attribute__((unused)) static int hi6138_set_reg(struct spi_device *spi, __u16 address, __u16 value)
 {
 	return hi6138_set_mem(spi, address, &value, 1);
 }
@@ -407,10 +414,12 @@ static int hi6138_irq_bm(struct net_device *dev)
 {
 	struct hi6138_priv *priv;
 	struct net_device_stats *stats;
-	__u16 smtirq_status, cmd_addr, data_addr, length;
+	__u16 smtirq_status, cmd_addr, data_addr, cmd_wrd, length,
+		  response_time, block_status, msg_ts[3], buffer[8];
 	int err, wrapped = 0;
 	struct sk_buff *skb;
-	__u16 buffer[36];
+	struct timespec64 tv;
+	avionics_data *data;
 
 	stats = &dev->stats;
 
@@ -437,8 +446,8 @@ static int hi6138_irq_bm(struct net_device *dev)
 		}
 
 		if ((cmd_addr < HI6138_CMD_STACK_START) ||
-                (cmd_addr > HI6138_CMD_STACK_END)) {
-			pr_err("avionics-hi6138: cmd_addr is out of range,  0x%x\n", cmd_addr);
+				(cmd_addr > HI6138_CMD_STACK_END)) {
+			pr_err("avionics-hi6138: cmd_addr is out of range, 0x%x\n", cmd_addr);
 			return 0;
 		}
 
@@ -458,57 +467,62 @@ static int hi6138_irq_bm(struct net_device *dev)
 				wrapped = 0;
 			}
 
-			err = hi6138_get_reg(priv->spi, priv->smt_last_addr + 6,
-						 &data_addr);
+			err = hi6138_get_mem(priv->spi, priv->smt_last_addr, buffer, 8);
 			if (err < 0) {
-				pr_err("avionics-hi6138-bm: Failed read"
-					   " data address\n");
+				pr_err("avionics-hi6138-bm: Failed read message block\n");
 				return err;
 			}
+
+			cmd_wrd = buffer[7];
+			data_addr = buffer[6];
+			length = buffer[5];
+			response_time = buffer[4];
+			block_status = buffer[3];
+			msg_ts[2] = buffer[2];
+			msg_ts[1] = buffer[1];
+			msg_ts[0] = buffer[0];
 
 			if ((data_addr < HI6138_DATA_STACK_START) ||
 					(data_addr > HI6138_DATA_STACK_END)) {
-				pr_err("avionics-hi6138: data_addr is out of range,  0x%x\n", data_addr);
+				pr_err("avionics-hi6138: data_addr is out of range, 0x%x\n", data_addr);
 				return 0;
 			}
 
-			err = hi6138_get_reg(priv->spi, priv->smt_last_addr + 5,
-						 &length);
-			if (err < 0) {
-				pr_err("avionics-hi6138-bm: Failed read"
-					   " data length\n");
-				return err;
+			data = kzalloc(sizeof(avionics_data) + length, GFP_KERNEL);
+			if (data == NULL) {
+				pr_err("avionics-hi6138-bm: Failed to allocate data buffer\n");
+				return -ENOMEM;
+			}
+			data->width = sizeof(__u16);
+			data->length = length;
+
+			ktime_get_real_ts64(&tv);
+			data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
+
+			data->status = (response_time << 16) + block_status;
+			data->count = (msg_ts[2] << 24) + (msg_ts[1] << 16) + msg_ts[0];
+
+			memcpy(data->data, &cmd_wrd, sizeof(cmd_wrd));
+
+			if (length > 2) {
+				err = hi6138_get_mem(priv->spi, data_addr, (__u16*)&data->data[2],
+						(length-2)/data->width);
+				if (err < 0) {
+					pr_err("avionics-hi6138-bm: Failed read data block\n");
+					return err;
+				}
 			}
 
-			skb = avionics_device_alloc_skb(dev, length);
+			skb = avionics_device_alloc_skb(dev, sizeof(avionics_data) + length);
 			if (unlikely(!skb)) {
 				pr_err("avionics-hi6138-bm: Failed to"
 						" allocate RX buffer\n");
 				return -ENOMEM;
 			}
 
-			err = hi6138_get_reg(priv->spi, priv->smt_last_addr + 7,
-						 &buffer[0]);
-			if (err < 0) {
-				pr_err("avionics-hi6138-bm: Failed read"
-					   " command word\n");
-				return err;
-			}
+			skb_copy_to_linear_data(skb, data, sizeof(avionics_data) + length);
 
-			if (length > 2) {
-				err = hi6138_get_mem(priv->spi, data_addr,
-							 &buffer[1], (length-2)/sizeof(buffer[1]));
-				if (err < 0) {
-					pr_err("avionics-hi6138-bm: Failed read"
-						   " command word\n");
-					return err;
-				}
-			}
-
-			/* TODO: Add timestamp */
-			/* TODO: Add message block status word */
-
-			skb_copy_to_linear_data(skb, buffer, length);
+			kfree(data);
 
 			stats->rx_packets++;
 			stats->rx_bytes += skb->len;
@@ -561,8 +575,6 @@ done:
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
 	}
-
-	usleep_range(100000, 1000000); /* Added to aid in debugging, TODO: REMOVE */
 
 	enable_irq(hi6138->irq);
 	mutex_unlock(&hi6138->lock);
@@ -710,25 +722,25 @@ static int hi6138_reset(struct spi_device *spi)
 	__u8 dev_id, rev_id;
 	int err;
 
-    pr_info("avionics-hi6138: Reseting Device\n");
+	pr_info("avionics-hi6138: Reseting Device\n");
 
-    if (hi6138->reset_gpio <= 0) {
-        pr_err("avionics-hi6138: no reset gpio configured\n");
-        return -1;
-    }
+	if (hi6138->reset_gpio <= 0) {
+		pr_err("avionics-hi6138: no reset gpio configured\n");
+		return -1;
+	}
 
-    err = gpio_direction_output(hi6138->reset_gpio, 0);
-    if (err < 0) {
-        pr_err("avionics-hi6138: Failed to set gpio reset\n");
-        return err;
-    }
+	err = gpio_direction_output(hi6138->reset_gpio, 0);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to set gpio reset\n");
+		return err;
+	}
 	usleep_range(10000, 15000);
 
-    err = gpio_direction_output(hi6138->reset_gpio, 1);
-    if (err < 0) {
-        pr_err("avionics-hi6138: Failed to clear gpio reset\n");
-        return err;
-    }
+	err = gpio_direction_output(hi6138->reset_gpio, 1);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to clear gpio reset\n");
+		return err;
+	}
 	usleep_range(10000, 15000);
 
 	err = hi6138_get_reg(spi, HI6138_REG_MCFG2, &mcfg2);
@@ -794,6 +806,13 @@ static int hi6138_reset(struct spi_device *spi)
 	err = hi6138_init_smt_mem(spi);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to initialize SMT memory\n");
+		return err;
+	}
+
+	err = hi6138_set_fastaccess(spi, HI6138_REG_TIME_TAG_CFG,
+			HI6138_REG_TIME_TAG_CFG_MTTCK3); /* 100ns time tag clock */
+	if (err < 0) {
+		pr_err("avionics-hi6138-bm: Failed set Time Tag config register\n");
 		return err;
 	}
 
@@ -884,9 +903,9 @@ static void hi6138_remove(struct spi_device *spi)
 		free_irq(hi6138->irq, hi6138);
 	}
 
-    if (hi6138->wq) {
+	if (hi6138->wq) {
 		cancel_work_sync(&hi6138->worker);
-    }
+	}
 
 	if (hi6138->reset_gpio > 0) {
 		if (gpio_direction_output(hi6138->reset_gpio, 1) < 0) {
