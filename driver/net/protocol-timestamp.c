@@ -37,6 +37,7 @@ static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
 	avionics_data *data;
 	struct avionics_proto_timestamp_data *buffer;
 	int err, i=0, num_bytes, num_words;
+    __u32 vbuffer;
 
 	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
 			msg, size, &dev);
@@ -79,10 +80,13 @@ static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
         data->count = i;
         data->width = 4;
         data->length = 4;
-        memcpy(&data->data[0], &(buffer[i].value), 4);
+
+		vbuffer = cpu_to_be32(buffer[i].value);
+        memcpy(&data->data[0], &vbuffer, 4);
 
         for (i++ ; (i < num_words) && (buffer[i-1].time_msecs == buffer[i].time_msecs); i++) {
-            memcpy(&data->data[data->length], &(buffer[i].value), 4);
+		    vbuffer = cpu_to_be32(buffer[i].value);
+            memcpy(&data->data[data->length], &vbuffer, 4);
             data->length += 4;
         }
 
@@ -112,6 +116,7 @@ static int protocol_timestamp_recvmsg(struct socket *sock,
 	avionics_data *data;
 	struct avionics_proto_timestamp_data *buffer;
 	int err = 0, num_words, num_bytes, i;
+    __u32 vbuffer;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,18,8)
 	int noblock;
 
@@ -153,7 +158,8 @@ static int protocol_timestamp_recvmsg(struct socket *sock,
 
 	for(i = 0; i < num_words; i++) {
 		buffer[i].time_msecs = data->time_msecs;
-		memcpy(&buffer[i].value, &data->data[i*data->width], data->width);
+		memcpy(&vbuffer, &data->data[i*data->width], data->width);
+        buffer[i].value = be32_to_cpu(vbuffer);
 	}
 
 	err = memcpy_to_msg(msg, buffer, num_bytes);
