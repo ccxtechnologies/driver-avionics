@@ -1,5 +1,5 @@
 /*
- * Copyright (C), 2020 CCX Technologies
+ * Copyright (C), 2020-2023 CCX Technologies
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -34,7 +34,7 @@
 MODULE_DESCRIPTION("HOLT Hi-6138 MIL-1553 Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
-MODULE_VERSION("1.0.0");
+MODULE_VERSION("1.0.1");
 
 #define HI6138_REG_MCFG1			0x0000
 #define HI6138_REG_MCFG1_TXINHA		(1<<15)
@@ -255,6 +255,29 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
 	return 0;
 }
 
+static int hi6138_get_mem_bytes(struct spi_device *spi, __u16 address, __u8 *value,
+			  int length)
+{
+	int err;
+	__u8 cmd = HI6138_OPCODE_READ_MEMPTR;
+
+	err = hi6138_set_fastaccess(spi, HI6138_REG_MEMPTRA, address);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to set memory pointer to 0x%x\n",
+			   address);
+		return err;
+	}
+
+	err = spi_write_then_read(spi, &cmd, sizeof(cmd), value, length);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to read from memory at 0x%x\n",
+			   address);
+		return err;
+	}
+
+	return 0;
+}
+
 static int hi6138_get_reg(struct spi_device *spi, __u16 address, __u16 *value)
 {
 	return hi6138_get_mem(spi, address, value, 1);
@@ -415,7 +438,7 @@ static int hi6138_irq_bm(struct net_device *dev)
 	struct hi6138_priv *priv;
 	struct net_device_stats *stats;
 	__u16 smtirq_status, cmd_addr, data_addr, cmd_wrd, length,
-		  response_time, block_status, msg_ts[3], buffer[8];
+		  response_time, block_status, msg_ts[3], buffer[8], vbuffer;
 	int err, wrapped = 0;
 	struct sk_buff *skb;
 	struct timespec64 tv;
@@ -502,11 +525,12 @@ static int hi6138_irq_bm(struct net_device *dev)
 			data->status = (response_time << 16) + block_status;
 			data->count = (msg_ts[2] << 16) + (msg_ts[1] << 8) + msg_ts[0];
 
-			memcpy(data->data, &cmd_wrd, sizeof(cmd_wrd));
+            vbuffer = cpu_to_be16(cmd_wrd);
+			memcpy(data->data, &vbuffer, sizeof(vbuffer));
 
 			if (length > 2) {
-				err = hi6138_get_mem(priv->spi, data_addr, (__u16*)&data->data[2],
-						(length-2)/data->width);
+				err = hi6138_get_mem_bytes(priv->spi, data_addr,
+                        &data->data[sizeof(vbuffer)], length-sizeof(vbuffer));
 				if (err < 0) {
 					pr_err("avionics-hi6138-bm: Failed read data block\n");
 					return err;
