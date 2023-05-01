@@ -98,8 +98,8 @@ MODULE_VERSION("1.2.2");
 #define HI3593_NUM_TX	1
 #define HI3593_NUM_RX	2
 
-#define HI3593_RX_DELAY_MULTIPLIER_MAX	 ((HI3593_FIFO_DEPTH/2+4)*sizeof(__u32)*1000000)
-#define HI3593_RX_DELAY_MULTIPLIER_MIN	 ((HI3593_FIFO_DEPTH/2)*sizeof(__u32)*1000000)
+#define HI3593_RX_DELAY_MULTIPLIER_MAX	 ((HI3593_FIFO_DEPTH/2+8)*sizeof(__u32)*8*1000000)
+#define HI3593_RX_DELAY_MULTIPLIER_MIN	 ((HI3593_FIFO_DEPTH/2+4)*sizeof(__u32)*8*1000000)
 
 #define HI3593_MAX_SPI_BUFSIZE	16
 
@@ -871,7 +871,10 @@ static void hi3593_rx_worker(struct work_struct *work)
 #endif
 		}
 
+		mutex_unlock(priv->lock);
 		usleep_range(priv->rx_udelay_min, priv->rx_udelay_max);
+		mutex_lock(priv->lock);
+
 		err = hi3593_rx_worker_spi_write_then_read(priv,
 				&status_cmd, sizeof(status_cmd), &status, sizeof(status));
 		if (unlikely(err < 0)) {
@@ -1273,7 +1276,7 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->rx_index = -1;
 		skb_queue_head_init(&priv->skbq);
 		priv->wq = hi3593->wq;
-		priv->rate = 12500;
+		priv->rate = 100000;
 		priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
 		priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
 		priv->rx_wrk_delay = usecs_to_jiffies(priv->rx_udelay_min);
@@ -1323,7 +1326,7 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->rx_enabled = &hi3593->rx_enabled[i];
 		skb_queue_head_init(&priv->skbq);
 		priv->wq = hi3593->wq;
-		priv->rate = 12500;
+		priv->rate = 100000;
 		priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
 		priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
 		priv->rx_wrk_delay = usecs_to_jiffies(priv->rx_udelay_min);
