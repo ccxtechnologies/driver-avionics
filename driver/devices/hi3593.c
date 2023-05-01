@@ -34,7 +34,7 @@
 MODULE_DESCRIPTION("HOLT Hi-3593 ARINC-429 Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
-MODULE_VERSION("1.2.1");
+MODULE_VERSION("1.2.2");
 
 #define HI3593_FIFO_DEPTH	32
 #define HI3593_MAX_DATA		(HI3593_FIFO_DEPTH * 16)
@@ -100,7 +100,6 @@ MODULE_VERSION("1.2.1");
 
 #define HI3593_RX_DELAY_MULTIPLIER_MAX	 ((HI3593_FIFO_DEPTH/2+4)*sizeof(__u32)*1000000)
 #define HI3593_RX_DELAY_MULTIPLIER_MIN	 ((HI3593_FIFO_DEPTH/2)*sizeof(__u32)*1000000)
-#define HI3593_RX_HALF_FILL_MULTIPLIER	 ((HI3593_FIFO_DEPTH/2+2)*sizeof(__u32)*HZ)
 
 #define HI3593_MAX_SPI_BUFSIZE	16
 
@@ -236,7 +235,7 @@ static int hi3593_set_rate(struct avionics_rate *rate,
 	priv->rate = rate->rate_hz;
 	priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
 	priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
-	priv->rx_wrk_delay = HI3593_RX_HALF_FILL_MULTIPLIER/priv->rate;
+	priv->rx_wrk_delay = usecs_to_jiffies(priv->rx_udelay_min);
 
 	return 0;
 }
@@ -261,11 +260,6 @@ static void hi3593_get_rate(struct avionics_rate *rate,
 	} else {
 		rate->rate_hz = 100000;
 	}
-
-	priv->rate = rate->rate_hz;
-	priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
-	priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
-	priv->rx_wrk_delay = HI3593_RX_HALF_FILL_MULTIPLIER/priv->rate;
 }
 
 static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
@@ -1282,7 +1276,7 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->rate = 12500;
 		priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
 		priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
-		priv->rx_wrk_delay = HI3593_RX_HALF_FILL_MULTIPLIER/priv->rate;
+		priv->rx_wrk_delay = usecs_to_jiffies(priv->rx_udelay_min);
 
 		INIT_DELAYED_WORK(&priv->worker, hi3593_tx_worker);
 
@@ -1332,7 +1326,7 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->rate = 12500;
 		priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
 		priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
-		priv->rx_wrk_delay = HI3593_RX_HALF_FILL_MULTIPLIER/priv->rate;
+		priv->rx_wrk_delay = usecs_to_jiffies(priv->rx_udelay_min);
 
 		INIT_DELAYED_WORK(&priv->worker, hi3593_rx_worker);
 
