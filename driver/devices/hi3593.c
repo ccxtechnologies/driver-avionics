@@ -98,8 +98,11 @@ MODULE_VERSION("1.2.2");
 #define HI3593_NUM_TX	1
 #define HI3593_NUM_RX	2
 
-#define HI3593_RX_DELAY_MULTIPLIER_MAX	 ((HI3593_FIFO_DEPTH/2+8)*sizeof(__u32)*8*1000000)
-#define HI3593_RX_DELAY_MULTIPLIER_MIN	 ((HI3593_FIFO_DEPTH/2+4)*sizeof(__u32)*8*1000000)
+#define BITS_PER_WORD       sizeof(__u32)*8
+#define A429_HIGH_SPEED_HZ 100000
+#define A429_LOW_SPEED_HZ  12500
+#define HI3593_RX_DELAY_MULTIPLIER_MAX	 (((HI3593_FIFO_DEPTH/2+8)*BITS_PER_WORD*USEC_PER_SEC)/A429_HIGH_SPEED_HZ)
+#define HI3593_RX_DELAY_MULTIPLIER_MIN	 (((HI3593_FIFO_DEPTH/2+4)*BITS_PER_WORD*USEC_PER_SEC)/A429_HIGH_SPEED_HZ)
 
 #define HI3593_MAX_SPI_BUFSIZE	16
 
@@ -127,9 +130,6 @@ struct hi3593_priv {
 	int irq;
 	atomic_t *rx_enabled;
 	int rate;
-	unsigned long rx_udelay_min;
-	unsigned long rx_udelay_max;
-	unsigned long rx_wrk_delay;
 	struct avionics_arinc429rx rx_config;
 	struct avionics_arinc429tx tx_config;
 
@@ -149,8 +149,8 @@ static __u8 hi3593_get_cntrl(struct hi3593_priv *priv)
 	} else if (priv->rx_index == 1) {
 		rd_cmd = HI3593_OPCODE_RD_RX2_CNTRL;
 	} else {
-		pr_err("avionics-hi3593: No valid port index\n");
-		return -EINVAL;
+		pr_err("avionics-hi3593: No valid port index: %d\n", priv->tx_index);
+		return 0;
 	}
 
 	return (__u8)spi_w8r8(priv->spi, rd_cmd);
@@ -162,12 +162,6 @@ static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 	int err;
 
 	status = hi3593_get_cntrl(priv);
-	if (status < 0) {
-		pr_err("avionics-hi3593: Failed to read control: %zd\n",
-			   status);
-		return -ENODEV;
-	}
-
 	if (priv->tx_index == 0) {
 		wr_cmd[0] = HI3593_OPCODE_WR_TX_CNTRL;
 	} else if (priv->rx_index == 0) {
@@ -187,15 +181,9 @@ static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 	}
 
 	status = hi3593_get_cntrl(priv);
-	if (status < 0) {
-		pr_err("avionics-hi3593: Failed to read control: %zd\n",
-			   status);
-		return -ENODEV;
-	}
-
 	if ((status&mask) != (value&mask)) {
 		pr_err("avionics-hi3593: Failed to set"
-			   " control to 0x%x & 0x%x : 0x%zx\n",
+			   " control to 0x%x & 0x%x : 0x%x\n",
 			   value, mask, status);
 		return -ENODEV;
 	}
@@ -216,9 +204,9 @@ static int hi3593_set_rate(struct avionics_rate *rate,
 		return -EINVAL;
 	}
 
-	if(rate->rate_hz == 100000) {
+	if(rate->rate_hz == A429_HIGH_SPEED_HZ) {
 		value = 0;
-	} else if(rate->rate_hz == 12500) {
+	} else if(rate->rate_hz == A429_LOW_SPEED_HZ) {
 		value = 1;
 	} else {
 		pr_warn("avionics-hi3593: speed must be 100000 or 12500 Hz\n");
@@ -232,9 +220,6 @@ static int hi3593_set_rate(struct avionics_rate *rate,
 	}
 
 	priv->rate = rate->rate_hz;
-	priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
-	priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
-	priv->rx_wrk_delay = usecs_to_jiffies(priv->rx_udelay_min);
 
 	return 0;
 }
@@ -252,12 +237,10 @@ static void hi3593_get_rate(struct avionics_rate *rate,
 	}
 
 	status = hi3593_get_cntrl(priv);
-	if (status < 0) {
-		pr_err("avionics-hi3593: Failed to get rate: %zd\n", status);
-	} else if(status&0x0001) {
-		rate->rate_hz = 12500;
+	if(status&0x01) {
+		rate->rate_hz = A429_LOW_SPEED_HZ;
 	} else {
-		rate->rate_hz = 100000;
+		rate->rate_hz = A429_HIGH_SPEED_HZ;
 	}
 }
 
@@ -275,12 +258,7 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 	}
 
 	status = hi3593_get_cntrl(priv);
-	if (status < 0) {
-		pr_err("avionics-hi3593: Failed to get rx cntrl: %zd\n",
-			   status);
-	} else {
-		config->flags = status;
-	}
+	config->flags = status;
 
 	if (priv->rx_index == 0) {
 		rd_priority = HI3593_OPCODE_RD_RX1_PRIORITY;
@@ -373,12 +351,7 @@ static void hi3593_get_arinc429tx(struct avionics_arinc429tx *config,
 
 
 	status = hi3593_get_cntrl(priv);
-	if (status < 0) {
-		pr_err("avionics-hi3593: Failed to get tx cntrl: %zd\n",
-			   status);
-	} else {
-		config->flags = status&0xfe;
-	}
+	config->flags = status&0xfe;
 
 	memcpy(&priv->tx_config, config, sizeof(struct avionics_arinc429tx));
 }
@@ -564,11 +537,7 @@ int hi3593_rx_worker_spi_write_then_read(
 	transfer.rx_buf = priv->rx_spi_rx_buffer;
 
 	status = spi_sync(priv->spi, &message);
-	if (status < 0) {
-		pr_err("avionics-hi3593: spi transfer failed\n");
-	} else {
-		memcpy(rxbuf, transfer.rx_buf+n_tx, n_rx);
-	}
+	memcpy(rxbuf, transfer.rx_buf+n_tx, n_rx);
 
 	return status;
 }
@@ -868,7 +837,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 		}
 
 		mutex_unlock(priv->lock);
-		usleep_range(priv->rx_udelay_min, priv->rx_udelay_max);
+		usleep_range(HI3593_RX_DELAY_MULTIPLIER_MIN, HI3593_RX_DELAY_MULTIPLIER_MAX);
 		mutex_lock(priv->lock);
 
 		err = hi3593_rx_worker_spi_write_then_read(priv,
@@ -899,7 +868,8 @@ static irqreturn_t hi3593_rx_irq(int irq, void *data)
 	disable_irq_nosync(priv->irq);
 
 	if (atomic_read(priv->rx_enabled)) {
-		queue_delayed_work(priv->wq, &priv->worker, priv->rx_wrk_delay);
+		queue_delayed_work(priv->wq, &priv->worker,
+                usecs_to_jiffies(HI3593_RX_DELAY_MULTIPLIER_MIN));
 	}
 
 	return IRQ_HANDLED;
@@ -963,7 +933,8 @@ static void hi3593_tx_worker(struct work_struct *work)
 		}
 
 		if (status & HI3593_FIFO_FULL) {
-			usleep_range(priv->rx_udelay_min, priv->rx_udelay_max);
+			usleep_range(HI3593_RX_DELAY_MULTIPLIER_MIN,
+                    HI3593_RX_DELAY_MULTIPLIER_MAX);
 
 			status = spi_w8r8(priv->spi, rd_cmd);
 			if (status < 0) {
@@ -1269,10 +1240,7 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->rx_index = -1;
 		skb_queue_head_init(&priv->skbq);
 		priv->wq = hi3593->wq;
-		priv->rate = 100000;
-		priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
-		priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
-		priv->rx_wrk_delay = usecs_to_jiffies(priv->rx_udelay_min);
+		priv->rate = A429_HIGH_SPEED_HZ;
 
 		INIT_DELAYED_WORK(&priv->worker, hi3593_tx_worker);
 
@@ -1319,10 +1287,7 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->rx_enabled = &hi3593->rx_enabled[i];
 		skb_queue_head_init(&priv->skbq);
 		priv->wq = hi3593->wq;
-		priv->rate = 100000;
-		priv->rx_udelay_min = HI3593_RX_DELAY_MULTIPLIER_MIN/priv->rate;
-		priv->rx_udelay_max = HI3593_RX_DELAY_MULTIPLIER_MAX/priv->rate;
-		priv->rx_wrk_delay = usecs_to_jiffies(priv->rx_udelay_min);
+		priv->rate = A429_HIGH_SPEED_HZ;
 
 		INIT_DELAYED_WORK(&priv->worker, hi3593_rx_worker);
 
