@@ -138,7 +138,7 @@ struct hi3593_priv {
 	__u8 rx_spi_tx_buffer[HI3593_MAX_SPI_BUFSIZE];
 };
 
-static ssize_t hi3593_get_cntrl(struct hi3593_priv *priv)
+static __u8 hi3593_get_cntrl(struct hi3593_priv *priv)
 {
 	__u8 rd_cmd;
 
@@ -153,13 +153,12 @@ static ssize_t hi3593_get_cntrl(struct hi3593_priv *priv)
 		return -EINVAL;
 	}
 
-	return spi_w8r8(priv->spi, rd_cmd);
+	return (__u8)spi_w8r8(priv->spi, rd_cmd);
 }
 
 static int hi3593_set_cntrl(struct hi3593_priv *priv, __u8 value, __u8 mask)
 {
-	ssize_t status;
-	__u8 wr_cmd[2];
+	__u8 wr_cmd[2], status;
 	int err;
 
 	status = hi3593_get_cntrl(priv);
@@ -244,7 +243,7 @@ static void hi3593_get_rate(struct avionics_rate *rate,
 				const struct net_device *dev)
 {
 	struct hi3593_priv *priv;
-	ssize_t status;
+	__u8 status;
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
@@ -266,8 +265,7 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 				  const struct net_device *dev)
 {
 	struct hi3593_priv *priv;
-	__u8 rd_priority, rd_filters;
-	ssize_t status;
+	__u8 rd_priority, rd_filters, status;
 	int err;
 
 	priv = avionics_device_priv(dev);
@@ -365,7 +363,7 @@ static void hi3593_get_arinc429tx(struct avionics_arinc429tx *config,
 				  const struct net_device *dev)
 {
 	struct hi3593_priv *priv;
-	ssize_t status;
+	__u8 status;
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
@@ -578,13 +576,12 @@ int hi3593_rx_worker_spi_write_then_read(
 static void hi3593_empty_fifo(struct hi3593_priv *priv)
 {
 	__u8 status_cmd, rd_cmd, buffer[4];
-	__u8 pl_cmd[3], pl_rd, pl[3];
+	__u8 pl_cmd[3], pl_rd, pl[3], status;
 	const __u8 pl_bits[3] = {
 		HI3593_PRIORITY_LABEL1,
 		HI3593_PRIORITY_LABEL2,
 		HI3593_PRIORITY_LABEL3
 	};
-	ssize_t status;
 	int err, i;
 
 	if (priv->rx_index == 0) {
@@ -684,13 +681,12 @@ static void hi3593_rx_worker(struct work_struct *work)
 	struct timespec64 tv;
 	avionics_data *data;
 	__u8 status_cmd, rd_cmd, buffer[sizeof(__u32)];
-	__u8 pl_cmd[3], *pl;
+	__u8 pl_cmd[3], *pl, status;
 	const __u8 pl_bits[3] = {
 		HI3593_PRIORITY_LABEL1,
 		HI3593_PRIORITY_LABEL2,
 		HI3593_PRIORITY_LABEL3
 	};
-	ssize_t status;
 	int err, i;
 	__u8 even_parity, check_parity, priority_enabled, flip_labels;
 
@@ -916,9 +912,8 @@ static void hi3593_tx_worker(struct work_struct *work)
 	struct hi3593_priv *priv;
 	struct sk_buff *skb;
 	avionics_data *data;
-	__u8 rd_cmd, wr_cmd[5];
+	__u8 rd_cmd, wr_cmd[5], status;
 	__u64 time_msecs, offset_msecs;
-	ssize_t status;
 	struct timespec64 tv;
 	int err, i;
 
@@ -1120,8 +1115,7 @@ static int hi3593_get_config(struct spi_device *spi)
 static int hi3593_reset(struct spi_device *spi)
 {
 	struct hi3593 *hi3593 = spi_get_drvdata(spi);
-	__u8 opcode, wr_cmd[2];
-	ssize_t status;
+	__u8 opcode, wr_cmd[2], status;
 	int err;
 
 	if (hi3593->reset_gpio <= 0 ) {
@@ -1175,8 +1169,7 @@ static int hi3593_set_aclk(struct spi_device *spi)
 {
 	struct hi3593 *hi3593 = spi_get_drvdata(spi);
 	int err;
-	__u8 cmd[2];
-	ssize_t status;
+	__u8 cmd[2], status;
 
 	if ((hi3593->aclk < 1000000) || (hi3593->aclk > 30000000)) {
 		pr_err("avionics-hi3593: aclk must be between"
