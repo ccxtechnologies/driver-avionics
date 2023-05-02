@@ -806,7 +806,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 
 	}
 
-	while (!(status & HI3593_FIFO_EMPTY)) {
+	while (!(status & HI3593_FIFO_EMPTY) && atomic_read(priv->rx_enabled)) {
 
 		ktime_get_real_ts64(&tv);
 		data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
