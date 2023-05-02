@@ -518,23 +518,22 @@ int hi3593_rx_worker_spi_write_then_read(
 			void *rxbuf, unsigned n_rx)
 {
 	int status;
-	struct spi_message	message;
-	struct spi_transfer	transfer;
+	struct spi_message	message = {0};
+	struct spi_transfer	transfer = {0};
 
 	if ((n_rx + n_tx) > HI3593_MAX_SPI_BUFSIZE) {
 		pr_err("avionics-hi3593: message size too long\n");
 		return -1;
 	}
 
-	spi_message_init(&message);
-	memset(&transfer, 0, sizeof(transfer));
-
-	transfer.len = n_tx + n_rx;
-	spi_message_add_tail(&transfer, &message);
+	spi_message_init_no_memset(&message);
 
 	memcpy(priv->rx_spi_tx_buffer, txbuf, n_tx);
 	transfer.tx_buf = priv->rx_spi_tx_buffer;
 	transfer.rx_buf = priv->rx_spi_rx_buffer;
+	transfer.len = n_tx + n_rx;
+
+	spi_message_add_tail(&transfer, &message);
 
 	status = spi_sync(priv->spi, &message);
 	memcpy(rxbuf, transfer.rx_buf+n_tx, n_rx);
@@ -1127,7 +1126,7 @@ static int hi3593_reset(struct spi_device *spi)
 
 	status = spi_w8r8(spi, HI3593_OPCODE_RD_TX_STATUS);
 	if (status != 0x01) {
-		pr_err("avionics-hi3593: TX FIFO is not cleared: %zx\n",
+		pr_err("avionics-hi3593: TX FIFO is not cleared: %x\n",
 			   status);
 		return -ENODEV;
 	}
@@ -1169,12 +1168,12 @@ static int hi3593_set_aclk(struct spi_device *spi)
 
 	status = spi_w8r8(spi, HI3593_OPCODE_RD_ALCK);
 	if (status != cmd[1]) {
-		pr_err("avionics-hi3593: ALCK not set to 0x%x: 0x%zx\n",
+		pr_err("avionics-hi3593: ALCK not set to 0x%x: 0x%x\n",
 			   cmd[1], status);
 		return -ENODEV;
 	}
 
-	pr_info("avionics-hi3593: ALCK set to 0x%zx\n", status);
+	pr_info("avionics-hi3593: ALCK set to 0x%x\n", status);
 
 	return 0;
 }
