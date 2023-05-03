@@ -102,7 +102,7 @@ struct avionics_rate {
 
 struct avionics_arinc429rx {
 	__u8 flags;
-	__u8 padding;
+	__u8 fifo_fill_delay_ms;
 	__u8 priority_labels[3];
 	__u8 label_filters[32]; /* one bit per label, starting at 0xFF */
 };

@@ -126,7 +126,7 @@ class avionics_rate(ctypes.Structure):
 class avionics_arinc429rx(ctypes.Structure):
     _fields_ = [
             ('flags', ctypes.c_uint8),
-            ('padding', ctypes.c_uint8),
+            ('fifo_fill_delay_ms', ctypes.c_uint8),
             ('priority_labels', ctypes.c_uint8 * 3),
             ('label_filters', ctypes.c_uint8 * 32),
     ]
@@ -344,6 +344,8 @@ if __name__ == "__main__":
             flags = str_to_flag(
                     setting_value, flags, AVIONICS_ARINC429RX_FLIP_LABEL_BITS
             )
+        elif setting_name == "fifo-fill-delay":
+            fifo_fill_delay_ms = int(setting_value)
 
         elif setting_name == "sd9-mask":
             flags = str_to_flag(
@@ -399,7 +401,7 @@ if __name__ == "__main__":
                         IFLA_AVIONICS_ARINC429RX
                 )
         ) + bytes(
-                avionics_arinc429rx(flags, 0, priority_labels, label_filters)
+                avionics_arinc429rx(flags, fifo_fill_delay_ms, priority_labels, label_filters)
         )
 
     elif IFLA_AVIONICS_ARINC429TX in data:

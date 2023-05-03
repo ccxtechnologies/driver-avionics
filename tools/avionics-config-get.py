@@ -124,7 +124,7 @@ class avionics_rate(ctypes.Structure):
 class avionics_arinc429rx(ctypes.Structure):
     _fields_ = [
             ('flags', ctypes.c_uint8),
-            ('padding', ctypes.c_uint8),
+            ('fifo_fill_delay_ms', ctypes.c_uint8),
             ('priority_labels', ctypes.c_uint8 * 3),
             ('label_filters', ctypes.c_uint8 * 32),
     ]
@@ -268,6 +268,8 @@ if __name__ == "__main__":
         label_filters = list(bytes(config.label_filters))
 
         print(f"Flip Label Bits = {bool(flip_label)}")
+
+        print(f"FIFO Fill Delay (ms) = {config.fifo_fill_delay_ms}")
 
         print(f"SD9 Mask = {bool(sd9_mask)}")
         print(f"SD10 Mask = {bool(sd10_mask)}")
