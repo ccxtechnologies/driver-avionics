@@ -102,7 +102,7 @@ MODULE_VERSION("1.2.2");
 #define A429_HIGH_SPEED_HZ 100000
 #define A429_LOW_SPEED_HZ  12500
 #define HI3593_RX_DELAY_MAX	 (((HI3593_FIFO_DEPTH/2)*BITS_PER_WORD*USEC_PER_SEC)/A429_HIGH_SPEED_HZ)
-#define HI3593_RX_DELAY_MIN	 (((HI3593_FIFO_DEPTH/2-2)*BITS_PER_WORD*USEC_PER_SEC)/A429_HIGH_SPEED_HZ)
+#define HI3593_RX_DELAY_MIN	 (((HI3593_FIFO_DEPTH/3)*BITS_PER_WORD*USEC_PER_SEC)/A429_HIGH_SPEED_HZ)
 
 #define HI3593_MAX_SPI_BUFSIZE	HI3593_FIFO_DEPTH*5
 
@@ -126,7 +126,7 @@ struct hi3593_priv {
 	int rx_index;
 	struct mutex *lock;
 	struct workqueue_struct *wq;
-	struct delayed_work worker;
+	struct work_struct worker;
 	int irq;
 	atomic_t *rx_enabled;
 	int rate;
@@ -511,9 +511,8 @@ static int hi3593_rx_stop(struct net_device *dev)
 		return 0;
 	}
 
-	netif_stop_queue(dev);
-
 	atomic_set(priv->rx_enabled, 0);
+	netif_stop_queue(dev);
 
 	return 0;
 }
@@ -748,13 +747,13 @@ static void hi3593_rx_worker(struct work_struct *work)
 	struct sk_buff *skb;
 	struct timespec64 tv;
 	avionics_data *data;
-	__u8 status_cmd, rd_cmd, buffer[sizeof(__u32)*(HI3593_FIFO_DEPTH/2)];
+	__u8 status_cmd, rd_cmd, buffer[sizeof(__u32)*HI3593_FIFO_DEPTH];
 	__u8 status;
     size_t buffer_size = 0;
 	int err, i, j;
 	__u8 even_parity, check_parity;
 
-	priv = container_of((struct delayed_work*)work, struct hi3593_priv, worker);
+	priv = container_of((struct work_struct*)work, struct hi3593_priv, worker);
 	dev = priv->dev;
 	stats = &dev->stats;
 
@@ -802,20 +801,18 @@ static void hi3593_rx_worker(struct work_struct *work)
 	while (!(status & HI3593_FIFO_EMPTY) && atomic_read(priv->rx_enabled)) {
 
 		ktime_get_real_ts64(&tv);
-		data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
+		data->time_msecs = tv.tv_sec*MSEC_PER_SEC + tv.tv_nsec/NSEC_PER_MSEC;
 		data->length = 0;
 
-		while (priv->fifo_fill_delay_ms && !(status & HI3593_FIFO_HALF) &&
-				atomic_read(priv->rx_enabled)) {
+		while (priv->fifo_fill_delay_ms && !(status & HI3593_FIFO_HALF)
+                && ((tv.tv_sec*MSEC_PER_SEC + tv.tv_nsec/NSEC_PER_MSEC - data->time_msecs)
+					< priv->fifo_fill_delay_ms)) {
+
 			mutex_unlock(priv->lock);
 			usleep_range(HI3593_RX_DELAY_MIN, HI3593_RX_DELAY_MAX);
 			mutex_lock(priv->lock);
 
 			ktime_get_real_ts64(&tv);
-			if (((tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC) - data->time_msecs)
-					>= priv->fifo_fill_delay_ms) {
-				break;
-			}
 
 			err = hi3593_rx_worker_spi_write_then_read(priv,
 					&status_cmd, sizeof(status_cmd), &status, sizeof(status));
@@ -824,6 +821,8 @@ static void hi3593_rx_worker(struct work_struct *work)
 				goto done;
 			}
 		}
+
+        stats->multicast = tv.tv_sec*MSEC_PER_SEC + tv.tv_nsec/NSEC_PER_MSEC - data->time_msecs;
 
 		for (i = 0; i < (HI3593_MAX_DATA - HI3593_FIFO_DEPTH); i+=buffer_size) {
 			if (status & HI3593_FIFO_FULL) {
@@ -836,11 +835,13 @@ static void hi3593_rx_worker(struct work_struct *work)
                 buffer_size = sizeof(__u32);
             }
 
-            err = hi3593_rx_worker_spi_write_then_read(priv,
-                    &rd_cmd, sizeof(rd_cmd), buffer, buffer_size);
-            if (unlikely(err)) {
-                pr_err("avionics-hi3593: Failed to read from fifo\n");
-                goto done;
+            for (j = 0; j < buffer_size; j+=sizeof(__u32)) {
+                err = hi3593_rx_worker_spi_write_then_read(priv,
+                        &rd_cmd, sizeof(rd_cmd), &buffer[j], sizeof(__u32));
+                if (unlikely(err)) {
+                    pr_err("avionics-hi3593: Failed to read from fifo\n");
+                    goto done;
+                }
             }
 
             if(!check_parity) {
@@ -896,10 +897,6 @@ static void hi3593_rx_worker(struct work_struct *work)
 #endif
 		}
 
-		mutex_unlock(priv->lock);
-		usleep_range(HI3593_RX_DELAY_MIN, HI3593_RX_DELAY_MAX);
-		mutex_lock(priv->lock);
-
 		err = hi3593_rx_worker_spi_write_then_read(priv,
 				&status_cmd, sizeof(status_cmd), &status, sizeof(status));
 		if (unlikely(err < 0)) {
@@ -928,8 +925,7 @@ static irqreturn_t hi3593_rx_irq(int irq, void *data)
 	disable_irq_nosync(priv->irq);
 
 	if (atomic_read(priv->rx_enabled)) {
-		queue_delayed_work(priv->wq, &priv->worker, priv->fifo_fill_delay_ms ?
-                usecs_to_jiffies(HI3593_RX_DELAY_MIN) : 0);
+		queue_work(priv->wq, &priv->worker);
 	}
 
 	return IRQ_HANDLED;
@@ -947,7 +943,7 @@ static void hi3593_tx_worker(struct work_struct *work)
 	struct timespec64 tv;
 	int err, i;
 
-	priv = container_of((struct delayed_work*)work, struct hi3593_priv, worker);
+	priv = container_of((struct work_struct*)work, struct hi3593_priv, worker);
 	dev = priv->dev;
 	stats = &dev->stats;
 
@@ -1066,7 +1062,7 @@ static netdev_tx_t hi3593_tx_start_xmit(struct sk_buff *skb,
 	}
 
 	skb_queue_tail(&priv->skbq, skb);
-	queue_delayed_work(priv->wq, &priv->worker, 0);
+	queue_work(priv->wq, &priv->worker);
 
 	return NETDEV_TX_OK;
 }
@@ -1302,7 +1298,7 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->rate = A429_HIGH_SPEED_HZ;
 		priv->fifo_fill_delay_ms = 0;
 
-		INIT_DELAYED_WORK(&priv->worker, hi3593_tx_worker);
+		INIT_WORK(&priv->worker, hi3593_tx_worker);
 
 		err = hi3593_set_arinc429tx(&avionics_arinc429tx_default,
 						hi3593->tx[i]);
@@ -1350,7 +1346,7 @@ static int hi3593_create_netdevs(struct spi_device *spi)
 		priv->rate = A429_HIGH_SPEED_HZ;
 		priv->fifo_fill_delay_ms = 0;
 
-		INIT_DELAYED_WORK(&priv->worker, hi3593_rx_worker);
+		INIT_WORK(&priv->worker, hi3593_rx_worker);
 
 		err = request_irq(hi3593->irq[i], hi3593_rx_irq,
 				  irq_flags, hi3593->rx[i]->name, priv);
@@ -1398,7 +1394,7 @@ static void hi3593_remove(struct spi_device *spi)
 			priv = avionics_device_priv(hi3593->tx[i]);
 			if (priv) {
 				skb_queue_purge(&priv->skbq);
-				cancel_delayed_work_sync(&priv->worker);
+				cancel_work_sync(&priv->worker);
 			}
 			avionics_device_unregister(hi3593->tx[i]);
 			avionics_device_free(hi3593->tx[i]);
@@ -1415,7 +1411,7 @@ static void hi3593_remove(struct spi_device *spi)
 				if (priv->irq) {
 					free_irq(priv->irq, priv);
 				}
-				cancel_delayed_work_sync(&priv->worker);
+				cancel_work_sync(&priv->worker);
 			}
 			avionics_device_unregister(hi3593->rx[i]);
 			avionics_device_free(hi3593->rx[i]);
