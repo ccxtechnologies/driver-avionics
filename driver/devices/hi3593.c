@@ -822,14 +822,13 @@ static void hi3593_rx_worker(struct work_struct *work)
 			}
 		}
 
-        stats->multicast = tv.tv_sec*MSEC_PER_SEC + tv.tv_nsec/NSEC_PER_MSEC - data->time_msecs;
-
 		for (i = 0; i < (HI3593_MAX_DATA - HI3593_FIFO_DEPTH); i+=buffer_size) {
 			if (status & HI3593_FIFO_FULL) {
 				stats->rx_errors++;
 				stats->rx_fifo_errors++;
                 buffer_size = sizeof(__u32)*HI3593_FIFO_DEPTH;
 			} else if (status & HI3593_FIFO_HALF) {
+                stats->multicast++;
                 buffer_size = sizeof(__u32)*HI3593_FIFO_DEPTH/2;
             } else {
                 buffer_size = sizeof(__u32);
