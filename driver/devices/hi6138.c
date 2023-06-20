@@ -523,7 +523,7 @@ static int hi6138_irq_bm(struct net_device *dev)
 			data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
 
 			data->status = (response_time << 16) + block_status;
-			data->count = (msg_ts[2] << 16) + (msg_ts[1] << 8) + msg_ts[0];
+			data->count = (msg_ts[2] << 32) + (msg_ts[1] << 16) + msg_ts[0];
 
             vbuffer = cpu_to_be16(cmd_wrd);
 			memcpy(data->data, &vbuffer, sizeof(vbuffer));
