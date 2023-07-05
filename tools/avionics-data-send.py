@@ -126,9 +126,28 @@ if __name__ == "__main__":
     device_name = sys.argv[2]
     file_name = sys.argv[3]
 
-    print("==== avionics-data-recv.py ====")
+    print("==== avionics-data-send.py ====")
 
     net_device_set_up(device_name)
+
+    with open(f"/sys/class/net/{device_name}/mtu", 'r') as fi:
+        mtu = int(fi.read().strip())
+
+    if protocol_name == "raw8":
+        data_size = 1
+    elif protocol_name == "raw16":
+        data_size = 2
+    elif protocol_name == "raw32":
+        data_size = 4
+    elif protocol_name == "timestamp":
+        data_size = ctypes.sizeof(avionics_proto_timestamp_data)
+    elif protocol_name == "packet":
+        data_size = ctypes.sizeof(avionics_proto_packet_data)
+
+    with open(file_name, 'rb') as fi:
+        data = fi.read()
+
+    max_send_size = (mtu//data_size) * data_size
 
     with socket.socket(
             PF_AVIONICS, socket.SOCK_RAW, avionics_protcol_get(protocol_name)
@@ -149,70 +168,68 @@ if __name__ == "__main__":
                 f" with protocol {protocol_name} --"
         )
 
-        with open(file_name, 'rb') as fi:
-            data = fi.read()
+        offset = 0
+        while offset < len(data):
 
-        bytes_ = sk.send(data)
-        print(f"+++ Sent: {bytes_} bytes +++")
+            bytes_ = sk.send(data[offset:offset+max_send_size])
+            print(f"+++ Sent: {bytes_} bytes +++")
 
-        if protocol_name == "raw8":
-            for i in range(0, len(data), 1):
-                d = int.from_bytes(data[i:i + 1], "little")
-                print(f"{i:08d}: 0x{d:02x}")
+            if protocol_name == "raw8":
+                for i in range(0, len(data), data_size):
+                    d = int.from_bytes(data[i:i + 1], "little")
+                    print(f"{i:08d}: 0x{d:02x}")
 
-        elif protocol_name == "raw16":
-            for i in range(0, len(data), 2):
-                d = int.from_bytes(data[i:i + 2], "little")
-                print(f"{i:08d}: 0x{d:04x}")
+            elif protocol_name == "raw16":
+                for i in range(0, len(data), data_size):
+                    d = int.from_bytes(data[i:i + 2], "little")
+                    print(f"{i:08d}: 0x{d:04x}")
 
-        elif protocol_name == "raw32":
-            for i in range(0, len(data), 4):
-                d = int.from_bytes(data[i:i + 4], "little")
-                print(f"{i:08d}: 0x{d:08x}")
-
-        elif protocol_name == "timestamp":
-            data_size = ctypes.sizeof(avionics_proto_timestamp_data)
-            for i in range(0, len(data), data_size):
-                d = avionics_proto_timestamp_data.from_buffer_copy(
-                        data[i:i + data_size]
-                )
-                ts = datetime.datetime.utcfromtimestamp(d.time_msecs / 1000.0
-                                                        ).isoformat()
-                print(f"{i:08d}: {ts} 0x{d.value:08x}")
-
-        elif protocol_name == "packet":
-            data_size = ctypes.sizeof(avionics_proto_packet_data)
-            data_length = len(data) - data_size
-
-            d = avionics_proto_packet_data.from_buffer_copy(data[:data_size])
-
-            ts = datetime.datetime.utcfromtimestamp(d.time_msecs / 1000.0
-                                                    ).isoformat()
-            print(f"timestamp: {ts}")
-            print(f"status: 0x{d.status:04x}")
-            print(f"count: {d.count}")
-            print(f"width: {d.width}")
-            print(f"length: {d.length}")
-
-            if d.length != data_length:
-                print(
-                        f"Error: invalid data length {d.length},"
-                        f" expected {data_length}"
-                )
-
-            if d.width == 4:
-                for i in range(data_size, len(data), 4):
+            elif protocol_name == "raw32":
+                for i in range(0, len(data), data_size):
                     d = int.from_bytes(data[i:i + 4], "little")
                     print(f"{i:08d}: 0x{d:08x}")
-            elif d.width == 2:
-                for i in range(data_size, len(data), 2):
-                    d = int.from_bytes(data[i:i + 2], "little")
-                    print(f"{i:08d}: 0x{d:04x}")
-            elif d.width == 1 or d.width == 0:
-                for i in range(data_size, len(data), 2):
-                    d = int.from_bytes(data[i:i + 2], "little")
-                    print(f"{i:08d}: 0x{d:04x}")
-            else:
-                print(f"Error: invalid data width {d.width}")
+
+            elif protocol_name == "timestamp":
+                for i in range(0, len(data), data_size):
+                    d = avionics_proto_timestamp_data.from_buffer_copy(
+                            data[i:i + data_size]
+                    )
+                    ts = datetime.datetime.utcfromtimestamp(d.time_msecs / 1000.0
+                                                            ).isoformat()
+                    print(f"{i:08d}: {ts} 0x{d.value:08x}")
+
+            elif protocol_name == "packet":
+                data_length = len(data) - data_size
+
+                d = avionics_proto_packet_data.from_buffer_copy(data[:data_size])
+
+                ts = datetime.datetime.utcfromtimestamp(d.time_msecs / 1000.0
+                                                        ).isoformat()
+                print(f"timestamp: {ts}")
+                print(f"status: 0x{d.status:04x}")
+                print(f"count: {d.count}")
+                print(f"width: {d.width}")
+                print(f"length: {d.length}")
+
+                if d.length != data_length:
+                    print(
+                            f"Error: invalid data length {d.length},"
+                            f" expected {data_length}"
+                    )
+
+                if d.width == 4:
+                    for i in range(data_size, len(data), 4):
+                        d = int.from_bytes(data[i:i + 4], "little")
+                        print(f"{i:08d}: 0x{d:08x}")
+                elif d.width == 2:
+                    for i in range(data_size, len(data), 2):
+                        d = int.from_bytes(data[i:i + 2], "little")
+                        print(f"{i:08d}: 0x{d:04x}")
+                elif d.width == 1 or d.width == 0:
+                    for i in range(data_size, len(data), 2):
+                        d = int.from_bytes(data[i:i + 2], "little")
+                        print(f"{i:08d}: 0x{d:04x}")
+                else:
+                    print(f"Error: invalid data width {d.width}")
 
     print("===============================")
