@@ -102,7 +102,7 @@ AVIONICS_ARINC429TX_SELF_TEST = (1 << 4)
 AVIONICS_ARINC429TX_EVEN_PARITY = (1 << 3)
 AVIONICS_ARINC429TX_PARITY_SET = (1 << 2)
 
-AVIONICS_ARINC429TX_HIZ_AT_REST = (1<<0)
+AVIONICS_ARINC429TX_HIZ_AT_REST = (1 << 0)
 
 AVIONICS_ARINC717RX_BPRZ = (1 << 0)
 AVIONICS_ARINC717RX_NOSYNC = (1 << 1)
@@ -321,6 +321,7 @@ if __name__ == "__main__":
     )
 
     data = get_device_config(device_name)
+    cfg = None
 
     if setting_name == "rate-hz":
         rate = avionics_rate.from_buffer_copy(data[IFLA_AVIONICS_RATE])
@@ -340,6 +341,7 @@ if __name__ == "__main__":
         )
 
         flags = rx_config.flags
+        fifo_fill_delay_ms = rx_config.fifo_fill_delay_ms
         priority_labels = rx_config.priority_labels
         label_filters = rx_config.label_filters
 
@@ -404,7 +406,10 @@ if __name__ == "__main__":
                         IFLA_AVIONICS_ARINC429RX
                 )
         ) + bytes(
-                avionics_arinc429rx(flags, fifo_fill_delay_ms, priority_labels, label_filters)
+                avionics_arinc429rx(
+                        flags, fifo_fill_delay_ms, priority_labels,
+                        label_filters
+                )
         )
 
     elif IFLA_AVIONICS_ARINC429TX in data:
