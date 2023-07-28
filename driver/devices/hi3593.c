@@ -1,5 +1,5 @@
 /*
- * Copyright (C), 2019 CCX Technologies
+ * Copyright (C), 2019-2023 CCX Technologies
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -355,9 +355,10 @@ static void hi3593_get_arinc429tx(struct avionics_arinc429tx *config,
 		return;
 	}
 
-
 	status = hi3593_get_cntrl(priv);
 	config->flags = status&0xfe;
+
+    config->mode = priv->tx_config.mode;
 
 	memcpy(&priv->tx_config, config, sizeof(struct avionics_arinc429tx));
 }
@@ -382,6 +383,15 @@ static int hi3593_set_arinc429tx(struct avionics_arinc429tx *config,
 		pr_err("avionics-hi3593: Failed to set tx cntrl.\n");
 		return err;
 	}
+
+    if(priv->tx_config.mode & AVIONICS_ARINC429TX_HIZ_AT_REST) {
+        err = hi3593_set_cntrl(priv, AVIONICS_ARINC429TX_HIZ,
+                       AVIONICS_ARINC429TX_HIZ);
+        if (err < 0) {
+            pr_err("avionics-hi3593: Failed to disable driver\n");
+            return err;
+        }
+    }
 
 	return 0;
 }
@@ -425,11 +435,13 @@ static int hi3593_tx_open(struct net_device *dev)
 		return -EINVAL;
 	}
 
-	err = hi3593_set_cntrl(priv, 0, AVIONICS_ARINC429TX_HIZ);
-	if (err < 0) {
-		pr_err("avionics-hi3593: Failed to enable driver\n");
-		return err;
-	}
+    if (!(priv->tx_config.mode & AVIONICS_ARINC429TX_HIZ_AT_REST)) {
+        err = hi3593_set_cntrl(priv, 0, AVIONICS_ARINC429TX_HIZ);
+        if (err < 0) {
+            pr_err("avionics-hi3593: Failed to enable driver\n");
+            return err;
+        }
+    }
 
 	netif_wake_queue(dev);
 
@@ -639,7 +651,8 @@ static void hi3593_empty_fifo(struct hi3593_priv *priv)
 
 }
 
-__u8 reverse(__u8 b) {
+__u8 reverse(__u8 b)
+{
 	b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
 	b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
 	b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
@@ -1021,11 +1034,39 @@ static void hi3593_tx_worker(struct work_struct *work)
 			}
 		}
 
+        if (priv->tx_config.mode & AVIONICS_ARINC429TX_HIZ_AT_REST) {
+            err = hi3593_set_cntrl(priv, 0, AVIONICS_ARINC429TX_HIZ);
+            if (err < 0) {
+                pr_err("avionics-hi3593: Failed to enable driver\n");
+                return;
+            }
+        }
+
 		err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
 		if (err < 0) {
 			pr_err("avionics-hi3593: Failed to load fifo\n");
 			return;
 		}
+
+        if (priv->tx_config.mode & AVIONICS_ARINC429TX_HIZ_AT_REST) {
+
+            do {
+                usleep_range(BITS_PER_WORD*USEC_PER_SEC/priv->rate,
+                        BITS_PER_WORD*USEC_PER_SEC/priv->rate + 500);
+                status = spi_w8r8(priv->spi, rd_cmd);
+                if (status < 0) {
+                    pr_err("avionics-hi3593: Failed to read status\n");
+                    return;
+                }
+            } while ((status & HI3593_FIFO_EMPTY) == 0);
+
+            err = hi3593_set_cntrl(priv, AVIONICS_ARINC429TX_HIZ,
+                           AVIONICS_ARINC429TX_HIZ);
+            if (err < 0) {
+                pr_err("avionics-hi3593: Failed to enable driver\n");
+                return;
+            }
+        }
 	}
 
 	stats->tx_packets++;

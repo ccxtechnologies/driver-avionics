@@ -100,6 +100,8 @@ AVIONICS_ARINC429TX_SELF_TEST = (1 << 4)
 AVIONICS_ARINC429TX_EVEN_PARITY = (1 << 3)
 AVIONICS_ARINC429TX_PARITY_SET = (1 << 2)
 
+AVIONICS_ARINC429TX_HIZ_AT_REST = (1<<0)
+
 AVIONICS_ARINC717RX_BPRZ = (1 << 0)
 AVIONICS_ARINC717RX_NOSYNC = (1 << 1)
 AVIONICS_ARINC717RX_SFTSYNC = (1 << 2)
@@ -133,7 +135,8 @@ class avionics_arinc429rx(ctypes.Structure):
 class avionics_arinc429tx(ctypes.Structure):
     _fields_ = [
             ('flags', ctypes.c_uint8),
-            ('padding', ctypes.c_uint8 * 3),
+            ('mode', ctypes.c_uint8),
+            ('padding', ctypes.c_uint8 * 2),
     ]
 
 
@@ -290,11 +293,13 @@ if __name__ == "__main__":
         self_test = config.flags & AVIONICS_ARINC429TX_SELF_TEST
         even_parity = config.flags & AVIONICS_ARINC429TX_EVEN_PARITY
         set_parity = config.flags & AVIONICS_ARINC429TX_PARITY_SET
+        hiz_at_rest = config.mode & AVIONICS_ARINC429TX_HIZ_AT_REST
 
         print(f"Flip Label Bits = {bool(flip_label)}")
         print(f"Self Test = {bool(self_test)}")
         print(f"Even Parity = {bool(even_parity)}")
         print(f"Set Parity = {bool(set_parity)}")
+        print(f"HiZ @ Rest = {bool(hiz_at_rest)}")
 
     if IFLA_AVIONICS_MIL1553MB in data:
         ...

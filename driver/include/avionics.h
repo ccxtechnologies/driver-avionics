@@ -112,9 +112,12 @@ struct avionics_arinc429rx {
 #define AVIONICS_ARINC429TX_EVEN_PARITY		(1<<3)
 #define AVIONICS_ARINC429TX_PARITY_SET		(1<<2)
 
+#define AVIONICS_ARINC429TX_HIZ_AT_REST		(1<<0)
+
 struct avionics_arinc429tx {
 	__u8 flags;
-	__u8 padding[3];
+	__u8 mode;
+	__u8 padding[2];
 };
 
 #define AVIONICS_ARINC717RX_BPRZ		(1<<0)

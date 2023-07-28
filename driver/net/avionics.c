@@ -33,7 +33,7 @@
 MODULE_DESCRIPTION("Avionics Networking Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
-MODULE_VERSION("1.1.0");
+MODULE_VERSION("1.1.1");
 
 MODULE_ALIAS_NETPROTO(PF_AVIONICS);
 

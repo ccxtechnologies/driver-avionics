@@ -102,6 +102,8 @@ AVIONICS_ARINC429TX_SELF_TEST = (1 << 4)
 AVIONICS_ARINC429TX_EVEN_PARITY = (1 << 3)
 AVIONICS_ARINC429TX_PARITY_SET = (1 << 2)
 
+AVIONICS_ARINC429TX_HIZ_AT_REST = (1<<0)
+
 AVIONICS_ARINC717RX_BPRZ = (1 << 0)
 AVIONICS_ARINC717RX_NOSYNC = (1 << 1)
 AVIONICS_ARINC717RX_SFTSYNC = (1 << 2)
@@ -135,7 +137,8 @@ class avionics_arinc429rx(ctypes.Structure):
 class avionics_arinc429tx(ctypes.Structure):
     _fields_ = [
             ('flags', ctypes.c_uint8),
-            ('padding', ctypes.c_uint8 * 3),
+            ('mode', ctypes.c_uint8),
+            ('padding', ctypes.c_uint8 * 2),
     ]
 
 
@@ -410,6 +413,7 @@ if __name__ == "__main__":
         )
 
         flags = tx_config.flags
+        mode = tx_config.mode
 
         if setting_name == "flip-label":
             flags = str_to_flag(
@@ -427,6 +431,10 @@ if __name__ == "__main__":
             flags = str_to_flag(
                     setting_value, flags, AVIONICS_ARINC429TX_PARITY_SET
             )
+        elif setting_name == "hiz-mode":
+            mode = str_to_flag(
+                    setting_value, mode, AVIONICS_ARINC429TX_HIZ_AT_REST
+            )
         else:
             print(
                     f"Error: {setting_name} is not a valid"
@@ -434,14 +442,14 @@ if __name__ == "__main__":
             )
             exit(1)
 
-        padding_def = ctypes.c_uint8 * 3
+        padding_def = ctypes.c_uint8 * 2
         cfg = bytes(
                 rtattr(
                         ctypes.sizeof(rtattr) +
                         ctypes.sizeof(avionics_arinc429tx),
                         IFLA_AVIONICS_ARINC429TX
                 )
-        ) + bytes(avionics_arinc429tx(flags, padding_def()))
+        ) + bytes(avionics_arinc429tx(flags, mode, padding_def()))
 
     elif IFLA_AVIONICS_MIL1553MB in data:
         print(
