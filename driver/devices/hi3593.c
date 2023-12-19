@@ -305,7 +305,7 @@ static int hi3593_set_arinc429rx(struct avionics_arinc429rx *config,
 		return -ENODEV;
 	}
 
-	err = hi3593_set_cntrl(priv, config->flags, 0xff);
+	err = hi3593_set_cntrl(priv, config->flags, 0xfe);
 	if (err < 0) {
 		pr_err("avionics-hi3593: Failed to set rx control.\n");
 		return err;
