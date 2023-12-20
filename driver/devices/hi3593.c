@@ -276,7 +276,7 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 	err = spi_write_then_read(priv->spi, &rd_priority, sizeof(rd_priority),
 				  config->priority_labels, 3);
 	if (err) {
-		pr_err("avionics-hi3593: Failed to get rx priorty labels: %d\n",
+		pr_err("avionics-hi3593: Failed to get rx priority labels: %d\n",
 			   err);
 	}
 
