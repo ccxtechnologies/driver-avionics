@@ -260,7 +260,7 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 	}
 
 	status = hi3593_get_cntrl(priv);
-	config->flags = (status&0xfe) | (priv->rx_config.flags&0x01);
+	config->flags = (status&0xfe) | ((priv->rx_config.flags)&0x01);
 
 	if (priv->rx_index == 0) {
 		rd_priority = HI3593_OPCODE_RD_RX1_PRIORITY;
