@@ -714,7 +714,7 @@ static int hi3593_rx_worker_priority(struct hi3593_priv *priv, avionics_data *da
             }
 
             if (!check_parity ||
-               (even_parity && (0x80&buffer[0])) ||
+               (even_parity && (0x80&buffer[0]) != 0x00) ||
                (!even_parity && (0x80&buffer[0]) == 0x00)) {
 
                 if (check_parity && even_parity) {
@@ -861,7 +861,7 @@ static void hi3593_rx_worker(struct work_struct *work)
 				data->length += buffer_size;
             } else {
                 for (j = 0; j < buffer_size; j+=sizeof(__u32)) {
-					if ((even_parity && (0x80&buffer[j])) ||
+					if ((even_parity && (0x80&buffer[j]) != 0x00) ||
 					   (!even_parity && (0x80&buffer[j]) == 0x00)) {
 
 						if (even_parity) {
