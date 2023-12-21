@@ -260,7 +260,7 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 	}
 
 	status = hi3593_get_cntrl(priv);
-	config->flags = status;
+	config->flags = (status&0xfe) | ((priv->rx_config.flags)&0x01);
 
 	if (priv->rx_index == 0) {
 		rd_priority = HI3593_OPCODE_RD_RX1_PRIORITY;
@@ -276,7 +276,7 @@ static void hi3593_get_arinc429rx(struct avionics_arinc429rx *config,
 	err = spi_write_then_read(priv->spi, &rd_priority, sizeof(rd_priority),
 				  config->priority_labels, 3);
 	if (err) {
-		pr_err("avionics-hi3593: Failed to get rx priorty labels: %d\n",
+		pr_err("avionics-hi3593: Failed to get rx priority labels: %d\n",
 			   err);
 	}
 
@@ -713,9 +713,9 @@ static int hi3593_rx_worker_priority(struct hi3593_priv *priv, avionics_data *da
                 return -1;
             }
 
-            if(!check_parity ||
-               (even_parity && (0x80&buffer[0])) ||
-               ((0x80&buffer[0]) == 0x00)) {
+            if (!check_parity ||
+               (even_parity && (0x80&buffer[0]) != 0x00) ||
+               (!even_parity && (0x80&buffer[0]) == 0x00)) {
 
                 if (check_parity && even_parity) {
                     buffer[0] &= 0x7f;
@@ -861,10 +861,10 @@ static void hi3593_rx_worker(struct work_struct *work)
 				data->length += buffer_size;
             } else {
                 for (j = 0; j < buffer_size; j+=sizeof(__u32)) {
-					if((even_parity && (0x80&buffer[j])) ||
-					   ((0x80&buffer[j]) == 0x00)) {
+					if ((even_parity && (0x80&buffer[j]) != 0x00) ||
+					   (!even_parity && (0x80&buffer[j]) == 0x00)) {
 
-						if (check_parity && even_parity) {
+						if (even_parity) {
 							buffer[j] &= 0x7f;
 						}
 
