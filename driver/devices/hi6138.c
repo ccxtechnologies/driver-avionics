@@ -34,7 +34,7 @@
 MODULE_DESCRIPTION("HOLT Hi-6138 MIL-1553 Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
-MODULE_VERSION("1.0.1");
+MODULE_VERSION("1.0.2");
 
 #define HI6138_REG_MCFG1			0x0000
 #define HI6138_REG_MCFG1_TXINHA		(1<<15)
@@ -580,27 +580,35 @@ static void hi6138_irq_worker(struct work_struct *work)
 		goto done;
 	}
 
-	if(hirq_status & HI6138_REG_HIRQ_MTIP) {
-		err = hi6138_irq_bm(hi6138->bm);
-		if (err < 0) {
-			pr_err("avionics-hi6138: Bus Monitor IRQ failure\n");
-		}
-	}
+    while(hirq_status) {
+        if(hirq_status & HI6138_REG_HIRQ_MTIP) {
+            err = hi6138_irq_bm(hi6138->bm);
+            if (err < 0) {
+                pr_err("avionics-hi6138: Bus Monitor IRQ failure\n");
+            }
+        }
+
+        err = gpio_direction_output(hi6138->ackirq_gpio, 1);
+        if (err < 0) {
+            pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
+        }
+
+        err = hi6138_get_fastaccess(hi6138->spi, HI6138_REG_HIRQ_PENDING,
+                        &hirq_status);
+        if (err < 0) {
+            pr_err("avionics-hi6138: Failed read hirq pending register\n");
+            goto done;
+        }
+
+        err = gpio_direction_output(hi6138->ackirq_gpio, 0);
+        if (err < 0) {
+            pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
+        }
+    }
 
 done:
-	err = gpio_direction_output(hi6138->ackirq_gpio, 1);
-	if (err < 0) {
-		pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
-	}
-
-	usleep_range(1, 10);
-
-	err = gpio_direction_output(hi6138->ackirq_gpio, 0);
-	if (err < 0) {
-		pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
-	}
-
 	enable_irq(hi6138->irq);
+
 	mutex_unlock(&hi6138->lock);
 }
 
