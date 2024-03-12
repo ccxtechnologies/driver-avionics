@@ -117,6 +117,9 @@ MODULE_VERSION("1.0.2");
 #define HI6138_DATA_STACK_IRQ		0x18ff
 #define HI6138_DATA_STACK_END		0x1fff
 
+#define HI6138_RX_DELAY_MIN         2500 /* 2.5ms */
+#define HI6138_RX_DELAY_MAX         3000 /* 3ms */
+
 struct hi6138 {
 	struct net_device *bm;
 	struct workqueue_struct *wq;
@@ -483,7 +486,7 @@ static int hi6138_irq_bm(struct net_device *dev)
 			wrapped = 1;
 		}
 
-		for(; ((priv->smt_last_addr <=cmd_addr) || wrapped) ;
+		for(; ((priv->smt_last_addr <= cmd_addr) || wrapped) ;
 			priv->smt_last_addr += 8) {
 			if(priv->smt_last_addr >= HI6138_CMD_STACK_END) {
 				priv->smt_last_addr = HI6138_CMD_STACK_START;
@@ -587,6 +590,8 @@ static void hi6138_irq_worker(struct work_struct *work)
                 pr_err("avionics-hi6138: Bus Monitor IRQ failure\n");
             }
         }
+
+		usleep_range(HI6138_RX_DELAY_MIN, HI6138_RX_DELAY_MAX);
 
         err = gpio_direction_output(hi6138->ackirq_gpio, 1);
         if (err < 0) {
