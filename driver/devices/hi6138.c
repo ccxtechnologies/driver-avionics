@@ -34,7 +34,7 @@
 MODULE_DESCRIPTION("HOLT Hi-6138 MIL-1553 Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
-MODULE_VERSION("1.0.2");
+MODULE_VERSION("1.0.3");
 
 #define HI6138_REG_MCFG1			0x0000
 #define HI6138_REG_MCFG1_TXINHA		(1<<15)
