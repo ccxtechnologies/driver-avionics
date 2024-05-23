@@ -26,7 +26,7 @@ struct protocol_sock {
 void protocol_init_skb(struct net_device *dev, struct sk_buff *skb);
 struct sk_buff* protocol_alloc_send_skb(struct net_device *dev,
 					int flags, struct sock *sk,
-					size_t size);
+					size_t size, int *err);
 
 int protocol_get_dev_from_msg(struct protocol_sock *psk,
 			      struct msghdr *msg, size_t size,

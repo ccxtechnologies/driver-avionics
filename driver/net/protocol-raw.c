@@ -47,11 +47,11 @@ static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 	}
 
 	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT, sk,
-			size + sizeof(avionics_data));
+			size + sizeof(avionics_data), &err);
 	if (!skb) {
-		pr_err("avionics-protocol-raw: Unable to allocate skbuff\n");
+		pr_err("avionics-protocol-raw: Unable to allocate skbuff: %d\n", err);
 		dev_put(dev);
-		return -ENOMEM;
+		return err;
 	}
 
 	data = (avionics_data *)skb_put(skb, size + sizeof(avionics_data));

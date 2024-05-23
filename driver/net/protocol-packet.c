@@ -45,12 +45,11 @@ static int protocol_packet_sendmsg(struct socket *sock, struct msghdr *msg,
 	}
 
 	skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT,
-				      sk, size);
-
+				      sk, size, &err);
 	if (!skb) {
-		pr_err("avionics-protocol-packet: Unable to allocate skbuff\n");
+		pr_err("avionics-protocol-packet: Unable to allocate skbuff: %d\n", err);
 		dev_put(dev);
-		return -ENOMEM;
+		return err;
 	}
 
 	err = memcpy_from_msg(skb_put(skb, size), msg, size);

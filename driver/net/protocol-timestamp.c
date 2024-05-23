@@ -66,12 +66,12 @@ static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
 	while(i < num_words) {
 
 		skb = protocol_alloc_send_skb(dev, msg->msg_flags&MSG_DONTWAIT, sk,
-				num_bytes + sizeof(avionics_data));
+				num_bytes + sizeof(avionics_data), &err);
 		if (!skb) {
-			pr_err("avionics-protocol-timestamp: Unable to allocate skbuff\n");
+			pr_err("avionics-protocol-timestamp: Unable to allocate skbuff: %d\n", err);
             kfree(buffer);
 			dev_put(dev);
-			return -ENOMEM;
+			return err;
 		}
 
         data = (avionics_data *)skb->head;

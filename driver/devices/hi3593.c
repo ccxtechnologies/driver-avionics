@@ -34,7 +34,7 @@
 MODULE_DESCRIPTION("HOLT Hi-3593 ARINC-429 Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
-MODULE_VERSION("1.2.2");
+MODULE_VERSION("1.2.3");
 
 #define HI3593_FIFO_DEPTH	32
 #define HI3593_MAX_DATA		(HI3593_FIFO_DEPTH * 8)
@@ -972,107 +972,109 @@ static void hi3593_tx_worker(struct work_struct *work)
 		return;
 	}
 
-	skb = skb_dequeue(&priv->skbq);
-	if (!skb) {
-		return;
-	}
-
-	wr_cmd[0] = HI3593_OPCODE_WR_TX_FIFO;
-	data = (avionics_data *)skb->data;
-	if (data->width == 0) {
-		data->width = sizeof(__u32);
-	}
-
-	if (data->width != sizeof(__u32)) {
-		pr_err("avionics-hi3593: Expect data width for ARINC-429 Data\n");
-		return;
-	}
-
-	if (data->length % data->width) {
-		pr_err("avionics-hi3593: ARINC-429 Data Length must be divisible by 4 bytes\n");
-		return;
-	}
-
-	for (i = 0; i < data->length; i += data->width) {
-		status = spi_w8r8(priv->spi, rd_cmd);
-		if (status < 0) {
-			pr_err("avionics-hi3593: Failed to read status\n");
-			return;
-		}
-
-		if (status & HI3593_FIFO_FULL) {
-			usleep_range(HI3593_RX_DELAY_MIN, HI3593_RX_DELAY_MAX);
-
-			status = spi_w8r8(priv->spi, rd_cmd);
-			if (status < 0) {
-				pr_err("avionics-hi3593: Failed to read status\n");
-				return;
-			}
-
-			if (status & HI3593_FIFO_FULL) {
-				pr_err("avionics-hi3593: TX fifo overflow\n");
-				stats->tx_dropped++;
-				consume_skb(skb);
-				return;
-			}
-		}
-
-		memcpy(&wr_cmd[1], &data->data[i], data->width);
-
-		if (data->time_msecs) {
-			ktime_get_real_ts64(&tv);
-			time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
-
-			if (time_msecs < data->time_msecs) {
-				offset_msecs = data->time_msecs - time_msecs;
-				if (offset_msecs > 360000) {
-					pr_err("avionics-hi3593-tx: Offset %llu too large, ignoring\n",
-						   offset_msecs) ;
-				} else if (offset_msecs > 2) {
-					usleep_range((offset_msecs*1000 - 500), (offset_msecs*1000 + 500));
-				}
-			}
-		}
-
-        if (priv->tx_config.mode & AVIONICS_ARINC429TX_HIZ_AT_REST) {
-            err = hi3593_set_cntrl(priv, 0, AVIONICS_ARINC429TX_HIZ);
-            if (err < 0) {
-                pr_err("avionics-hi3593: Failed to enable driver\n");
-                return;
-            }
+    while (1) {
+        skb = skb_dequeue(&priv->skbq);
+        if (!skb) {
+            return;
         }
 
-		err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
-		if (err < 0) {
-			pr_err("avionics-hi3593: Failed to load fifo\n");
-			return;
-		}
+        wr_cmd[0] = HI3593_OPCODE_WR_TX_FIFO;
+        data = (avionics_data *)skb->data;
+        if (data->width == 0) {
+            data->width = sizeof(__u32);
+        }
 
-        if (priv->tx_config.mode & AVIONICS_ARINC429TX_HIZ_AT_REST) {
+        if (data->width != sizeof(__u32)) {
+            pr_err("avionics-hi3593: Expect data width for ARINC-429 Data\n");
+            return;
+        }
 
-            do {
-                usleep_range(BITS_PER_WORD*USEC_PER_SEC/priv->rate,
-                        BITS_PER_WORD*USEC_PER_SEC/priv->rate + 500);
+        if (data->length % data->width) {
+            pr_err("avionics-hi3593: ARINC-429 Data Length must be divisible by 4 bytes\n");
+            return;
+        }
+
+        for (i = 0; i < data->length; i += data->width) {
+            status = spi_w8r8(priv->spi, rd_cmd);
+            if (status < 0) {
+                pr_err("avionics-hi3593: Failed to read status\n");
+                return;
+            }
+
+            if (status & HI3593_FIFO_FULL) {
+                usleep_range(HI3593_RX_DELAY_MIN, HI3593_RX_DELAY_MAX);
+
                 status = spi_w8r8(priv->spi, rd_cmd);
                 if (status < 0) {
                     pr_err("avionics-hi3593: Failed to read status\n");
                     return;
                 }
-            } while ((status & HI3593_FIFO_EMPTY) == 0);
 
-            err = hi3593_set_cntrl(priv, AVIONICS_ARINC429TX_HIZ,
-                           AVIONICS_ARINC429TX_HIZ);
+                if (status & HI3593_FIFO_FULL) {
+                    pr_err("avionics-hi3593: TX fifo overflow\n");
+                    stats->tx_dropped++;
+                    consume_skb(skb);
+                    return;
+                }
+            }
+
+            memcpy(&wr_cmd[1], &data->data[i], data->width);
+
+            if (data->time_msecs) {
+                ktime_get_real_ts64(&tv);
+                time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
+
+                if (time_msecs < data->time_msecs) {
+                    offset_msecs = data->time_msecs - time_msecs;
+                    if (offset_msecs > 360000) {
+                        pr_err("avionics-hi3593-tx: Offset %llu too large, ignoring\n",
+                               offset_msecs) ;
+                    } else if (offset_msecs > 2) {
+                        usleep_range((offset_msecs*1000 - 500), (offset_msecs*1000 + 500));
+                    }
+                }
+            }
+
+            if (priv->tx_config.mode & AVIONICS_ARINC429TX_HIZ_AT_REST) {
+                err = hi3593_set_cntrl(priv, 0, AVIONICS_ARINC429TX_HIZ);
+                if (err < 0) {
+                    pr_err("avionics-hi3593: Failed to enable driver\n");
+                    return;
+                }
+            }
+
+            err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
             if (err < 0) {
-                pr_err("avionics-hi3593: Failed to enable driver\n");
+                pr_err("avionics-hi3593: Failed to load fifo\n");
                 return;
             }
+
+            if (priv->tx_config.mode & AVIONICS_ARINC429TX_HIZ_AT_REST) {
+
+                do {
+                    usleep_range(BITS_PER_WORD*USEC_PER_SEC/priv->rate,
+                            BITS_PER_WORD*USEC_PER_SEC/priv->rate + 500);
+                    status = spi_w8r8(priv->spi, rd_cmd);
+                    if (status < 0) {
+                        pr_err("avionics-hi3593: Failed to read status\n");
+                        return;
+                    }
+                } while ((status & HI3593_FIFO_EMPTY) == 0);
+
+                err = hi3593_set_cntrl(priv, AVIONICS_ARINC429TX_HIZ,
+                               AVIONICS_ARINC429TX_HIZ);
+                if (err < 0) {
+                    pr_err("avionics-hi3593: Failed to enable driver\n");
+                    return;
+                }
+            }
         }
-	}
 
-	stats->tx_packets++;
-	stats->tx_bytes += data->length;
+        stats->tx_packets++;
+        stats->tx_bytes += data->length;
 
-	consume_skb(skb);
+        consume_skb(skb);
+    }
 }
 
 static netdev_tx_t hi3593_tx_start_xmit(struct sk_buff *skb,

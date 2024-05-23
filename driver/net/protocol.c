@@ -41,15 +41,14 @@ void protocol_init_skb(struct net_device *dev, struct sk_buff *skb)
 
 struct sk_buff* protocol_alloc_send_skb(struct net_device *dev,
 					int flags, struct sock *sk,
-					size_t size)
+					size_t size, int *err)
 {
 	struct sk_buff *skb;
-	int err;
 
-	skb = sock_alloc_send_skb(sk, size, flags, &err);
+	skb = sock_alloc_send_skb(sk, size, flags, err);
 	if (!skb) {
-		pr_err("avionics-device: Unable to allocate send skbuff: %d.\n",
-		       err);
+		pr_err("avionics-protocol: Unable to allocate send skbuff: %d.\n",
+		       *err);
 		return NULL;
 	}
 
