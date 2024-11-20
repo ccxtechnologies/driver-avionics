@@ -34,7 +34,7 @@
 MODULE_DESCRIPTION("HOLT Hi-6138 MIL-1553 Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
-MODULE_VERSION("1.0.3");
+MODULE_VERSION("1.0.4");
 
 #define HI6138_REG_MCFG1			0x0000
 #define HI6138_REG_MCFG1_TXINHA		(1<<15)
@@ -184,7 +184,6 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 			  int length)
 {
 	int err, i;
-	__u16 vbuffer;
 	__u8 *buffer;
 
 	err = hi6138_set_fastaccess(spi, HI6138_REG_MEMPTRA, address);
@@ -194,7 +193,7 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 		return err;
 	}
 
-	buffer = kmalloc(1 + sizeof(vbuffer)*length, GFP_KERNEL);
+	buffer = kmalloc(1 + sizeof(__u16)*length, GFP_KERNEL);
 	if (buffer == NULL) {
 		pr_err("avionics-hi6138: Failed to allocate memory\n");
 		return -ENOMEM;
@@ -202,11 +201,11 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 
 	buffer[0] = HI6138_OPCODE_WRITE_MEMPTR;
 	for(i = 0; i < length; i++) {
-		vbuffer = cpu_to_be16(value[i]);
-		memcpy(&buffer[1+i*sizeof(vbuffer)], &vbuffer, sizeof(vbuffer));
+		buffer[1+i*2] = (value[i] & 0xff00) >> 8;
+		buffer[2+i*2] = (value[i] & 0xff);
 	}
 
-	err = spi_write(spi, buffer, 1 + sizeof(vbuffer)*length);
+	err = spi_write(spi, buffer, 1 + sizeof(__u16)*length);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to write to memory at 0x%x\n",
 			   address);
@@ -222,7 +221,6 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
 			  int length)
 {
 	int err, i;
-	__u16 vbuffer;
 	__u8 *buffer;
 	__u8 cmd = HI6138_OPCODE_READ_MEMPTR;
 
@@ -233,14 +231,14 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
 		return err;
 	}
 
-	buffer = kmalloc(sizeof(vbuffer)*length, GFP_KERNEL);
+	buffer = kmalloc(sizeof(__u16)*length, GFP_KERNEL);
 	if (buffer == NULL) {
 		pr_err("avionics-hi6138: Failed to allocate memory\n");
 		return -ENOMEM;
 	}
 
 	err = spi_write_then_read(spi, &cmd, sizeof(cmd),
-				  buffer, sizeof(vbuffer)*length);
+				  buffer, sizeof(__u16)*length);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to read from memory at 0x%x\n",
 			   address);
@@ -249,8 +247,7 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
 	}
 
 	for(i = 0; i < length; i++) {
-		memcpy(&vbuffer, &buffer[i*sizeof(vbuffer)], sizeof(vbuffer));
-		value[i] = be16_to_cpu(vbuffer);
+		value[i] = (buffer[i*2] << 8) + buffer[i*2+1];
 	}
 
 	kvfree(buffer);
@@ -440,7 +437,7 @@ static int hi6138_irq_bm(struct net_device *dev)
 	struct hi6138_priv *priv;
 	struct net_device_stats *stats;
 	__u16 smtirq_status, cmd_addr, data_addr, cmd_wrd, length,
-		  response_time, block_status, msg_ts[3], buffer[8], vbuffer;
+		  response_time, block_status, msg_ts[3], buffer[8];
 	int err, wrapped = 0;
 	struct sk_buff *skb;
 	struct timespec64 tv;
@@ -528,12 +525,12 @@ static int hi6138_irq_bm(struct net_device *dev)
 			data->status = (response_time << 16) + block_status;
 			data->count = (((__u64)msg_ts[2]) << 32) + (((__u32)msg_ts[1]) << 16) + msg_ts[0];
 
-			vbuffer = cpu_to_be16(cmd_wrd);
-			memcpy(data->data, &vbuffer, sizeof(vbuffer));
+			data->data[0] = (cmd_wrd & 0xff00) >> 8;
+			data->data[1] = cmd_wrd & 0x00ff;
 
 			if (length > 2) {
 				err = hi6138_get_mem_bytes(priv->spi, data_addr,
-						&data->data[sizeof(vbuffer)], length-sizeof(vbuffer));
+						&data->data[sizeof(__u16)], length-sizeof(__u16));
 				if (err < 0) {
 					pr_err("avionics-hi6138-bm: Failed read data block\n");
 					return err;
