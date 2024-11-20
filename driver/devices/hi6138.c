@@ -164,12 +164,11 @@ static int hi6138_get_fastaccess(struct spi_device *spi, __u8 address, __u16 *va
 static int hi6138_set_fastaccess(struct spi_device *spi, __u8 address, __u16 value)
 {
 	int err;
-	__u16 vbuffer;
 	__u8 buffer[3];
 
 	buffer[0] = 0x80 | (address&0x3f);
-	vbuffer = cpu_to_be16(value);
-	memcpy(&buffer[1], &vbuffer, sizeof(vbuffer));
+	buffer[1] = (value & 0xff00) >> 8;
+	buffer[2] = (value & 0x00ff);
 
 	err = spi_write(spi, buffer, sizeof(buffer));
 	if (err < 0) {
@@ -486,6 +485,8 @@ static int hi6138_irq_bm(struct net_device *dev)
 			wrapped = 1;
 		}
 
+		ktime_get_real_ts64(&tv);
+
 		for(; ((priv->smt_last_addr <= cmd_addr) || wrapped) ;
 			priv->smt_last_addr += 8) {
 			if(priv->smt_last_addr >= HI6138_CMD_STACK_END) {
@@ -522,7 +523,6 @@ static int hi6138_irq_bm(struct net_device *dev)
 			data->width = sizeof(__u16);
 			data->length = length;
 
-			ktime_get_real_ts64(&tv);
 			data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
 
 			data->status = (response_time << 16) + block_status;
