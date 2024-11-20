@@ -279,12 +279,27 @@ static int hi6138_get_mem_bytes(struct spi_device *spi, __u16 address, __u8 *val
 
 static int hi6138_get_reg(struct spi_device *spi, __u16 address, __u16 *value)
 {
-	return hi6138_get_mem(spi, address, value, 1);
-}
+	int err;
+	__u8 cmd = HI6138_OPCODE_READ_MEMPTR, buffer[2];
 
-__attribute__((unused)) static int hi6138_set_reg(struct spi_device *spi, __u16 address, __u16 value)
-{
-	return hi6138_set_mem(spi, address, &value, 1);
+	err = hi6138_set_fastaccess(spi, HI6138_REG_MEMPTRA, address);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to set memory pointer to 0x%x\n",
+			   address);
+		return err;
+	}
+
+	err = spi_write_then_read(spi, &cmd, sizeof(cmd),
+				  &buffer, sizeof(buffer));
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to read from memory at 0x%x\n",
+			   address);
+		return err;
+	}
+
+	*value = (buffer[0] << 8) + buffer[1];
+
+	return 0;
 }
 
 static void hi6138_get_mil1553bm(struct avionics_mil1553bm *config,
