@@ -117,8 +117,8 @@ MODULE_VERSION("1.0.3");
 #define HI6138_DATA_STACK_IRQ		0x18ff
 #define HI6138_DATA_STACK_END		0x1fff
 
-#define HI6138_RX_DELAY_MIN         2500 /* 2.5ms */
-#define HI6138_RX_DELAY_MAX         3000 /* 3ms */
+#define HI6138_RX_DELAY_MIN			2500 /* 2.5ms */
+#define HI6138_RX_DELAY_MAX			3000 /* 3ms */
 
 struct hi6138 {
 	struct net_device *bm;
@@ -526,14 +526,14 @@ static int hi6138_irq_bm(struct net_device *dev)
 			data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
 
 			data->status = (response_time << 16) + block_status;
-			data->count = (msg_ts[2] << 32) + (msg_ts[1] << 16) + msg_ts[0];
+			data->count = (((__u64)msg_ts[2]) << 32) + (((__u32)msg_ts[1]) << 16) + msg_ts[0];
 
-            vbuffer = cpu_to_be16(cmd_wrd);
+			vbuffer = cpu_to_be16(cmd_wrd);
 			memcpy(data->data, &vbuffer, sizeof(vbuffer));
 
 			if (length > 2) {
 				err = hi6138_get_mem_bytes(priv->spi, data_addr,
-                        &data->data[sizeof(vbuffer)], length-sizeof(vbuffer));
+						&data->data[sizeof(vbuffer)], length-sizeof(vbuffer));
 				if (err < 0) {
 					pr_err("avionics-hi6138-bm: Failed read data block\n");
 					return err;
@@ -576,6 +576,11 @@ static void hi6138_irq_worker(struct work_struct *work)
 
 	mutex_lock(&hi6138->lock);
 
+	err = gpio_direction_output(hi6138->ackirq_gpio, 0);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to clear gpio ackirq\n");
+	}
+
 	err = hi6138_get_fastaccess(hi6138->spi, HI6138_REG_HIRQ_PENDING,
 					&hirq_status);
 	if (err < 0) {
@@ -583,37 +588,33 @@ static void hi6138_irq_worker(struct work_struct *work)
 		goto done;
 	}
 
-    while(hirq_status) {
-        if(hirq_status & HI6138_REG_HIRQ_MTIP) {
-            err = hi6138_irq_bm(hi6138->bm);
-            if (err < 0) {
-                pr_err("avionics-hi6138: Bus Monitor IRQ failure\n");
-            }
-        }
+	while(hirq_status) {
+		if(hirq_status & HI6138_REG_HIRQ_MTIP) {
+			err = hi6138_irq_bm(hi6138->bm);
+			if (err < 0) {
+				pr_err("avionics-hi6138: Bus Monitor IRQ failure\n");
+			}
+		}
 
 		usleep_range(HI6138_RX_DELAY_MIN, HI6138_RX_DELAY_MAX);
 
-        err = hi6138_get_fastaccess(hi6138->spi, HI6138_REG_HIRQ_PENDING,
-                        &hirq_status);
-        if (err < 0) {
-            pr_err("avionics-hi6138: Failed read hirq pending register\n");
-            goto done;
-        }
+		err = hi6138_get_fastaccess(hi6138->spi, HI6138_REG_HIRQ_PENDING,
+						&hirq_status);
+		if (err < 0) {
+			pr_err("avionics-hi6138: Failed read hirq pending register\n");
+			goto done;
+		}
 
-    }
+	}
 
 done:
-    err = gpio_direction_output(hi6138->ackirq_gpio, 1);
-    if (err < 0) {
-        pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
-    }
+
+	err = gpio_direction_output(hi6138->ackirq_gpio, 1);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
+	}
 
 	enable_irq(hi6138->irq);
-
-    err = gpio_direction_output(hi6138->ackirq_gpio, 0);
-    if (err < 0) {
-        pr_err("avionics-hi6138: Failed to clear gpio ackirq\n");
-    }
 
 	mutex_unlock(&hi6138->lock);
 }
@@ -978,7 +979,7 @@ static int hi6138_probe(struct spi_device *spi)
 	struct device *dev = &spi->dev;
 	int err;
 
-	pr_info("avionics-hi6138: Adding Device\n");
+	pr_info("avionics-hi6138: Adding MIL-1553 Device\n");
 
 	hi6138 = devm_kzalloc(dev, sizeof(*hi6138), GFP_KERNEL);
 	if (!hi6138) {
