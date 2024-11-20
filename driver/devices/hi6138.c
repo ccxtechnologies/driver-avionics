@@ -593,11 +593,6 @@ static void hi6138_irq_worker(struct work_struct *work)
 
 		usleep_range(HI6138_RX_DELAY_MIN, HI6138_RX_DELAY_MAX);
 
-        err = gpio_direction_output(hi6138->ackirq_gpio, 1);
-        if (err < 0) {
-            pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
-        }
-
         err = hi6138_get_fastaccess(hi6138->spi, HI6138_REG_HIRQ_PENDING,
                         &hirq_status);
         if (err < 0) {
@@ -605,14 +600,20 @@ static void hi6138_irq_worker(struct work_struct *work)
             goto done;
         }
 
-        err = gpio_direction_output(hi6138->ackirq_gpio, 0);
-        if (err < 0) {
-            pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
-        }
     }
 
 done:
+    err = gpio_direction_output(hi6138->ackirq_gpio, 1);
+    if (err < 0) {
+        pr_err("avionics-hi6138: Failed to set gpio ackirq\n");
+    }
+
 	enable_irq(hi6138->irq);
+
+    err = gpio_direction_output(hi6138->ackirq_gpio, 0);
+    if (err < 0) {
+        pr_err("avionics-hi6138: Failed to clear gpio ackirq\n");
+    }
 
 	mutex_unlock(&hi6138->lock);
 }
