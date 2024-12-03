@@ -185,31 +185,43 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 {
 	int err, i;
 	__u8 *buffer;
+	struct spi_transfer fastaccess, set_mem;
+	struct spi_message msg;
 
-	err = hi6138_set_fastaccess(spi, HI6138_REG_MEMPTRA, address);
-	if (err < 0) {
-		pr_err("avionics-hi6138: Failed to set memory pointer to 0x%x\n",
-			   address);
-		return err;
-	}
-
-	buffer = kmalloc(1 + sizeof(__u16)*length, GFP_KERNEL);
+	buffer = kmalloc(4 + sizeof(__u16)*length, GFP_KERNEL);
 	if (buffer == NULL) {
 		pr_err("avionics-hi6138: Failed to allocate memory\n");
 		return -ENOMEM;
 	}
 
-	buffer[0] = HI6138_OPCODE_WRITE_MEMPTR;
+	buffer[0] = 0x80 | (HI6138_REG_MEMPTRA&0x3f);
+	buffer[1] = (address & 0xff00) >> 8;
+	buffer[2] = (address & 0x00ff);
+
+	fastaccess.tx_buf = buffer;
+	fastaccess.len = 3;
+	fastaccess.cs_change = 1;
+
+	buffer[3] = HI6138_OPCODE_WRITE_MEMPTR;
+
+	set_mem.tx_buf = &buffer[3];
+	set_mem.len = 1+sizeof(__u16)*length;
+	set_mem.cs_change = 0;
+
 	for(i = 0; i < length; i++) {
-		buffer[1+i*2] = (value[i] & 0xff00) >> 8;
-		buffer[2+i*2] = (value[i] & 0xff);
+		buffer[4+i*2] = (value[i] & 0xff00) >> 8;
+		buffer[5+i*2] = (value[i] & 0xff);
 	}
 
-	err = spi_write(spi, buffer, 1 + sizeof(__u16)*length);
+	spi_message_init(&msg);
+	spi_message_add_tail(&fastaccess, &msg);
+	spi_message_add_tail(&set_mem, &msg);
+
+	err = spi_sync(spi, &msg);
 	if (err < 0) {
 		pr_err("avionics-hi6138: Failed to write to memory at 0x%x\n",
 			   address);
-		 kvfree(buffer);
+		kvfree(buffer);
 		return err;
 	}
 
@@ -756,14 +768,16 @@ static int hi6138_init_smt_mem(struct spi_device *spi)
 		return err;
 	}
 
+	err = 0;
 	for (int i = 0; i < 8; i++) {
 		if (smt_addr_list[i] != smt_addr_list_verify[i]) {
 			pr_err("avionics-hi6138: Failed to set SMT addr %d: 0x%04x => 0x%04x\n",
 					i, smt_addr_list[i], smt_addr_list_verify[i]);
+			err = -EINVAL;
 		}
 	}
 
-	return 0;
+	return err;
 }
 
 static int hi6138_reset(struct spi_device *spi)
