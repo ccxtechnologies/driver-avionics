@@ -120,6 +120,8 @@ MODULE_VERSION("1.0.4");
 #define HI6138_RX_DELAY_MIN			2500 /* 2.5ms */
 #define HI6138_RX_DELAY_MAX			3000 /* 3ms */
 
+#define HI6138_MAX_BUFFER			256
+
 struct hi6138 {
 	struct net_device *bm;
 	struct workqueue_struct *wq;
@@ -140,6 +142,7 @@ struct hi6138_priv {
 	struct mutex *lock;
 	atomic_t *bm_enabled;
 	__u16 smt_last_addr;
+	avionics_data *data;
 };
 
 static int hi6138_get_fastaccess(struct spi_device *spi, __u8 address, __u16 *value)
@@ -344,7 +347,7 @@ static int hi6138_get_reg(struct spi_device *spi, __u16 address, __u16 *value)
 		return err;
 	}
 
-    *value = be16_to_cpu(*value);
+	*value = be16_to_cpu(*value);
 
 	return 0;
 }
@@ -512,6 +515,7 @@ static int hi6138_irq_bm(struct net_device *dev)
 		pr_err("avionics-hi6138-bm: Failed to get private data\n");
 		return -EINVAL;
 	}
+	data = priv->data;
 
 	err = hi6138_get_fastaccess(priv->spi, HI6138_REG_SMTIRQ_PENDING,
 					&smtirq_status);
@@ -574,12 +578,11 @@ static int hi6138_irq_bm(struct net_device *dev)
 				return -EINVAL;
 			}
 
-			data = kzalloc(sizeof(avionics_data) + length, GFP_KERNEL);
-			if (data == NULL) {
-				pr_err("avionics-hi6138-bm: Failed to allocate data buffer\n");
-				return -ENOMEM;
-			}
 			data->width = sizeof(__u16);
+			if (length > HI6138_MAX_BUFFER) {
+				pr_err("avionics-hi6138: length exceeds max length: %d\n", length);
+				return -EINVAL;
+			}
 			data->length = length;
 
 			data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
@@ -607,8 +610,6 @@ static int hi6138_irq_bm(struct net_device *dev)
 			}
 
 			skb_copy_to_linear_data(skb, data, sizeof(avionics_data) + length);
-
-			kfree(data);
 
 			stats->rx_packets++;
 			stats->rx_bytes += skb->len;
@@ -959,6 +960,12 @@ static int hi6138_create_netdevs(struct spi_device *spi)
 	priv->bm_enabled = &hi6138->bm_enabled;
 	skb_queue_head_init(&priv->skbq);
 
+	priv->data = kzalloc(sizeof(avionics_data) + HI6138_MAX_BUFFER, GFP_KERNEL);
+	if (priv->data == NULL) {
+		pr_err("avionics-hi6138: Failed to allocate data buffer\n");
+		return -ENOMEM;
+	}
+
 	err = hi6138_set_mil1553bm(&avionics_mil1553bm_default,
 					hi6138->bm);
 	if (err) {
@@ -993,6 +1000,7 @@ static void hi6138_remove(struct spi_device *spi)
 		priv = avionics_device_priv(hi6138->bm);
 		if (priv) {
 			skb_queue_purge(&priv->skbq);
+			kfree(priv->data);
 		}
 		avionics_device_unregister(hi6138->bm);
 		avionics_device_free(hi6138->bm);
