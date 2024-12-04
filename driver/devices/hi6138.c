@@ -151,8 +151,8 @@ static int hi6138_get_fastaccess(struct spi_device *spi, __u8 address, __u16 *va
 	err = spi_write_then_read(spi, &cmd, sizeof(cmd),
 				  &buffer, sizeof(buffer));
 	if (err < 0) {
-		pr_err("avionics-hi6138: Failed to fast-access read 0x%x\n",
-			   address);
+		pr_err("avionics-hi6138: Failed to fast-access read 0x%x: %d\n",
+			   address, err);
 		return err;
 	}
 
@@ -172,8 +172,8 @@ static int hi6138_set_fastaccess(struct spi_device *spi, __u8 address, __u16 val
 
 	err = spi_write(spi, buffer, sizeof(buffer));
 	if (err < 0) {
-		pr_err("avionics-hi6138: Failed to fast-access write 0x%x\n",
-			   address);
+		pr_err("avionics-hi6138: Failed to fast-access write 0x%x\n: %d",
+			   address, err);
 		return err;
 	}
 
@@ -204,7 +204,7 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 
 	set_mem.tx_buf = value;
 	set_mem.bits_per_word = 16;
-	set_mem.len = length;
+	set_mem.len = length*sizeof(__u16);
 	set_mem.cs_change = 0;
 
 	spi_message_init(&msg);
@@ -214,8 +214,8 @@ static int hi6138_set_mem(struct spi_device *spi, __u16 address, __u16 *value,
 
 	err = spi_sync(spi, &msg);
 	if (err < 0) {
-		pr_err("avionics-hi6138: Failed to write to memory at 0x%x\n",
-			   address);
+		pr_err("avionics-hi6138: Failed to write to memory at 0x%x: %d\n",
+			   address, err);
 		return err;
 	}
 
@@ -246,7 +246,7 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
 
 	get_mem.rx_buf = value;
 	get_mem.bits_per_word = 16;
-	get_mem.len = length;
+	get_mem.len = length*sizeof(__u16);
 	get_mem.cs_change = 0;
 
 	spi_message_init(&msg);
@@ -256,8 +256,8 @@ static int hi6138_get_mem(struct spi_device *spi, __u16 address, __u16 *value,
 
 	err = spi_sync(spi, &msg);
 	if (err < 0) {
-		pr_err("avionics-hi6138: Failed to read words from memory at 0x%x\n",
-			   address);
+		pr_err("avionics-hi6138: Failed to read words from memory at 0x%x: %d\n",
+			   address, err);
 		return err;
 	}
 
@@ -298,8 +298,8 @@ static int hi6138_get_mem_bytes(struct spi_device *spi, __u16 address, __u8 *val
 
 	err = spi_sync(spi, &msg);
 	if (err < 0) {
-		pr_err("avionics-hi6138: Failed to read bytes from memory at 0x%x\n",
-			   address);
+		pr_err("avionics-hi6138: Failed to read bytes from memory at 0x%x: %d\n",
+			   address, err);
 		return err;
 	}
 
@@ -329,7 +329,7 @@ static int hi6138_get_reg(struct spi_device *spi, __u16 address, __u16 *value)
 
 	get_mem.rx_buf = value;
 	get_mem.bits_per_word = 16;
-	get_mem.len = 1;
+	get_mem.len = sizeof(__u16);
 	get_mem.cs_change = 0;
 
 	spi_message_init(&msg);
@@ -339,10 +339,12 @@ static int hi6138_get_reg(struct spi_device *spi, __u16 address, __u16 *value)
 
 	err = spi_sync(spi, &msg);
 	if (err < 0) {
-		pr_err("avionics-hi6138: Failed to read register at 0x%x\n",
-			   address);
+		pr_err("avionics-hi6138: Failed to set register at 0x%x: %d\n",
+			   address, err);
 		return err;
 	}
+
+    *value = be16_to_cpu(*value);
 
 	return 0;
 }
@@ -569,7 +571,7 @@ static int hi6138_irq_bm(struct net_device *dev)
 			if ((data_addr < HI6138_DATA_STACK_START) ||
 					(data_addr > HI6138_DATA_STACK_END)) {
 				pr_err("avionics-hi6138: data_addr is out of range, 0x%x\n", data_addr);
-				return 0;
+				return -EINVAL;
 			}
 
 			data = kzalloc(sizeof(avionics_data) + length, GFP_KERNEL);
