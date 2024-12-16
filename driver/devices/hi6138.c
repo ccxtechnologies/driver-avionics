@@ -34,7 +34,7 @@
 MODULE_DESCRIPTION("HOLT Hi-6138 MIL-1553 Driver");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Charles Eidsness <charles@ccxtechnologies.com>");
-MODULE_VERSION("1.0.4");
+MODULE_VERSION("1.0.5");
 
 #define HI6138_REG_MCFG1			0x0000
 #define HI6138_REG_MCFG1_TXINHA		(1<<15)
@@ -497,6 +497,51 @@ static int hi6138_bm_stop(struct net_device *dev)
 	return 0;
 }
 
+static int hi6138_init_smt_mem(struct spi_device *spi)
+{
+	const __u16 base_addr = 0x00b0;
+	__u16 smt_addr_list[8] = {
+		cpu_to_be16(HI6138_CMD_STACK_START),
+		cpu_to_be16(HI6138_CMD_STACK_START),
+		cpu_to_be16(HI6138_CMD_STACK_END),
+		cpu_to_be16(HI6138_CMD_STACK_IRQ),
+		cpu_to_be16(HI6138_DATA_STACK_START),
+		cpu_to_be16(HI6138_DATA_STACK_START),
+		cpu_to_be16(HI6138_DATA_STACK_END),
+		cpu_to_be16(HI6138_DATA_STACK_IRQ)
+	}, smt_addr_list_verify[8];
+	int err;
+
+	err = hi6138_set_fastaccess(spi, HI6138_REG_SMTSTART, base_addr);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set SMT start address\n");
+		return err;
+	}
+
+	err = hi6138_set_mem(spi, base_addr, smt_addr_list, 8);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed set configure SMT memory\n");
+		return err;
+	}
+
+	err = hi6138_get_mem(spi, base_addr, smt_addr_list_verify, 8);
+	if (err < 0) {
+		pr_err("avionics-hi6138: Failed get configure SMT memory\n");
+		return err;
+	}
+
+	err = 0;
+	for (int i = 0; i < 8; i++) {
+		if (smt_addr_list[i] != smt_addr_list_verify[i]) {
+			pr_err("avionics-hi6138: Failed to set SMT addr %d: 0x%04x => 0x%04x\n",
+					i, smt_addr_list[i], smt_addr_list_verify[i]);
+			err = -EINVAL;
+		}
+	}
+
+	return err;
+}
+
 static int hi6138_irq_bm(struct net_device *dev)
 {
 	struct hi6138_priv *priv;
@@ -572,12 +617,6 @@ static int hi6138_irq_bm(struct net_device *dev)
 			msg_ts[1] = be16_to_cpu(buffer[1]);
 			msg_ts[0] = be16_to_cpu(buffer[0]);
 
-			if ((data_addr < HI6138_DATA_STACK_START) ||
-					(data_addr > HI6138_DATA_STACK_END)) {
-				pr_err("avionics-hi6138: data_addr is out of range, 0x%x\n", data_addr);
-				return -EINVAL;
-			}
-
 			data->width = sizeof(__u16);
 			if (length > HI6138_MAX_BUFFER) {
 				pr_err("avionics-hi6138: length exceeds max length: %d\n", length);
@@ -594,6 +633,14 @@ static int hi6138_irq_bm(struct net_device *dev)
 			data->data[1] = cmd_wrd & 0x00ff;
 
 			if (length > 2) {
+				if ((data_addr < HI6138_DATA_STACK_START) ||
+						(data_addr > HI6138_DATA_STACK_END)) {
+					pr_warn("avionics-hi6138: data_addr is out of range at 0x%x,"
+							" resetting smt mem\n", data_addr);
+					hi6138_init_smt_mem(priv->spi);
+					return -EINVAL;
+				}
+
 				err = hi6138_get_mem_bytes(priv->spi, data_addr,
 						&data->data[sizeof(__u16)], length-sizeof(__u16));
 				if (err < 0) {
@@ -652,7 +699,7 @@ static void hi6138_irq_worker(struct work_struct *work)
 		if(hirq_status & HI6138_REG_HIRQ_MTIP) {
 			err = hi6138_irq_bm(hi6138->bm);
 			if (err < 0) {
-				pr_err("avionics-hi6138: Bus Monitor IRQ failure\n");
+				pr_warn("avionics-hi6138: Bus Monitor IRQ Error\n");
 			}
 		}
 
@@ -769,51 +816,6 @@ static int hi6138_get_config(struct spi_device *spi)
 	}
 
 	return 0;
-}
-
-static int hi6138_init_smt_mem(struct spi_device *spi)
-{
-	const __u16 base_addr = 0x00b0;
-	__u16 smt_addr_list[8] = {
-		cpu_to_be16(HI6138_CMD_STACK_START),
-		cpu_to_be16(HI6138_CMD_STACK_START),
-		cpu_to_be16(HI6138_CMD_STACK_END),
-		cpu_to_be16(HI6138_CMD_STACK_IRQ),
-		cpu_to_be16(HI6138_DATA_STACK_START),
-		cpu_to_be16(HI6138_DATA_STACK_START),
-		cpu_to_be16(HI6138_DATA_STACK_END),
-		cpu_to_be16(HI6138_DATA_STACK_IRQ)
-	}, smt_addr_list_verify[8];
-	int err;
-
-	err = hi6138_set_fastaccess(spi, HI6138_REG_SMTSTART, base_addr);
-	if (err < 0) {
-		pr_err("avionics-hi6138: Failed set SMT start address\n");
-		return err;
-	}
-
-	err = hi6138_set_mem(spi, base_addr, smt_addr_list, 8);
-	if (err < 0) {
-		pr_err("avionics-hi6138: Failed set configure SMT memory\n");
-		return err;
-	}
-
-	err = hi6138_get_mem(spi, base_addr, smt_addr_list_verify, 8);
-	if (err < 0) {
-		pr_err("avionics-hi6138: Failed get configure SMT memory\n");
-		return err;
-	}
-
-	err = 0;
-	for (int i = 0; i < 8; i++) {
-		if (smt_addr_list[i] != smt_addr_list_verify[i]) {
-			pr_err("avionics-hi6138: Failed to set SMT addr %d: 0x%04x => 0x%04x\n",
-					i, smt_addr_list[i], smt_addr_list_verify[i]);
-			err = -EINVAL;
-		}
-	}
-
-	return err;
 }
 
 static int hi6138_reset(struct spi_device *spi)
