@@ -480,7 +480,6 @@ static void hi3593_empty_fifo(struct hi3593_priv *priv);
 static int hi3593_rx_open(struct net_device *dev)
 {
 	struct hi3593_priv *priv;
-	struct irq_desc *desc;
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
@@ -500,10 +499,7 @@ static int hi3593_rx_open(struct net_device *dev)
 
 	mutex_lock(priv->lock);
 
-	desc = irq_to_desc(priv->irq);
-	if (desc && desc->depth > 0) {
-		enable_irq(priv->irq);
-	}
+	enable_irq(priv->irq);
 	hi3593_empty_fifo(priv);
 
 	mutex_unlock(priv->lock);
@@ -528,6 +524,7 @@ static int hi3593_rx_stop(struct net_device *dev)
 	}
 
 	atomic_set(priv->rx_enabled, 0);
+	disable_irq_nosync(priv->irq);
 	netif_stop_queue(dev);
 
 	return 0;
