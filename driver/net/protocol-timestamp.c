@@ -31,7 +31,7 @@ static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
 				size_t size)
 {
 	struct sock *sk = sock->sk;
-	struct protocol_raw_sock *psk = (struct protocol_raw_sock*)sk;
+	struct protocol_sock *psk = (struct protocol_sock*)sk;
 	struct sk_buff *skb;
 	struct net_device *dev;
 	avionics_data *data;
@@ -39,8 +39,7 @@ static int protocol_timestamp_sendmsg(struct socket *sock, struct msghdr *msg,
 	int err, i=0, num_bytes, num_words;
     __u32 vbuffer;
 
-	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
-			msg, size, &dev);
+	err = protocol_get_dev_from_msg(psk, msg, size, &dev);
 	if (err) {
 		pr_err("avionics-protocol-timestamp: Can't find device: %d.\n", err);
 		return err;

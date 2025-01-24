@@ -32,15 +32,14 @@ static int protocol_raw_sendmsg(struct socket *sock, struct msghdr *msg,
 				size_t size)
 {
 	struct sock *sk = sock->sk;
-	struct protocol_raw_sock *psk = (struct protocol_raw_sock*)sk;
+	struct protocol_sock *psk = (struct protocol_sock*)sk;
 	struct sk_buff *skb;
 	avionics_data *data;
 	struct timespec64 tv;
 	struct net_device *dev;
 	int err = 0;
 
-	err = protocol_get_dev_from_msg((struct protocol_sock*)psk,
-			msg, size, &dev);
+	err = protocol_get_dev_from_msg(psk, msg, size, &dev);
 	if (err) {
 		pr_err("avionics-protocol-raw: Can't find device: %d.\n", err);
 		return err;
