@@ -184,7 +184,7 @@ int protocol_raw_register(void)
 {
 	int err;
 
-	err = proto_register(&protocol_raw, AVIONICS_PROTO_RAW);
+	err = proto_register(&protocol_raw, 0);
 	if (err) {
 		pr_err("avionics-protocol-raw: Failed to register"
 			   " Raw Protocol: %d\n", err);

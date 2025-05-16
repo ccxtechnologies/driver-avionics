@@ -234,7 +234,7 @@ int protocol_timestamp_register(void)
 {
 	int err;
 
-	err = proto_register(&protocol_timestamp, AVIONICS_PROTO_TIMESTAMP);
+	err = proto_register(&protocol_timestamp, 0);
 	if (err) {
 		pr_err("avionics-protocol-timestamp: Failed to register"
 			   " Timestamp Protocol: %d\n", err);
