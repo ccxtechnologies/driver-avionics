@@ -189,7 +189,7 @@ int protocol_packet_register(void)
 {
 	int err;
 
-	err = proto_register(&protocol_packet, 0);
+	err = proto_register(&protocol_packet, 1);
 	if (err) {
 		pr_err("avionics-protocol-packet: Failed to register"
 		       " Packet Protocol: %d\n", err);
