@@ -203,6 +203,22 @@ static __init int avionics_init(void)
 		return rc;
 	}
 
+	rc = protocol_packet_register();
+	if (rc) {
+		pr_err("avionics: Failed to register packet protocol: %d\n", rc);
+		device_netlink_unregister();
+		socket_list_exit();
+		return rc;
+	}
+
+	rc = protocol_timestamp_register();
+	if (rc) {
+		pr_err("avionics: Failed to register timestamp protocol: %d\n", rc);
+		device_netlink_unregister();
+		socket_list_exit();
+		return rc;
+	}
+
 	rc = sock_register(&avionics_net_proto_family);
 	if (rc) {
 		pr_err("avionics: Failed to register socket type: %d\n", rc);
