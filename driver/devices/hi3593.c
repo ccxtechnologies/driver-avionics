@@ -101,8 +101,8 @@ MODULE_VERSION("1.2.4");
 #define BITS_PER_WORD       sizeof(__u32)*8
 #define A429_HIGH_SPEED_HZ 100000
 #define A429_LOW_SPEED_HZ  12500
-#define HI3593_RX_DELAY_MAX	 (((HI3593_FIFO_DEPTH/2)*BITS_PER_WORD*USEC_PER_SEC)/A429_HIGH_SPEED_HZ)
-#define HI3593_RX_DELAY_MIN	 (((HI3593_FIFO_DEPTH/3)*BITS_PER_WORD*USEC_PER_SEC)/A429_HIGH_SPEED_HZ)
+#define HI3593_RX_DELAY_MAX	 (((HI3593_FIFO_DEPTH/4)*BITS_PER_WORD*USEC_PER_SEC)/A429_HIGH_SPEED_HZ)
+#define HI3593_RX_DELAY_MIN	 (((HI3593_FIFO_DEPTH/5)*BITS_PER_WORD*USEC_PER_SEC)/A429_HIGH_SPEED_HZ)
 
 #define HI3593_MAX_SPI_BUFSIZE	HI3593_FIFO_DEPTH*8
 
@@ -867,59 +867,45 @@ static void hi3593_rx_worker(struct work_struct *work)
 			}
 		}
 
-		for (i = 0; i < (HI3593_MAX_DATA - HI3593_FIFO_DEPTH); i+=buffer_size) {
-			if (status & HI3593_FIFO_FULL) {
-				stats->rx_errors++;
-				stats->rx_fifo_errors++;
-                buffer_size = sizeof(__u32)*HI3593_FIFO_DEPTH;
-			} else if (status & HI3593_FIFO_HALF) {
-                stats->multicast++;
-                buffer_size = sizeof(__u32)*HI3593_FIFO_DEPTH/2;
-            } else {
-                buffer_size = sizeof(__u32);
+        if (status & HI3593_FIFO_FULL) {
+            stats->rx_errors++;
+            stats->rx_fifo_errors++;
+            buffer_size = sizeof(__u32)*HI3593_FIFO_DEPTH;
+        } else if (status & HI3593_FIFO_HALF) {
+            stats->multicast++;
+            buffer_size = sizeof(__u32)*HI3593_FIFO_DEPTH/2;
+        } else {
+            buffer_size = sizeof(__u32);
+        }
+
+        err = hi3593_rx_worker_spi_cmd_then_read_word(priv,
+                rd_cmd, buffer, buffer_size);
+        if (unlikely(err)) {
+            pr_err("avionics-hi3593: Failed to read from fifo\n");
+            goto done;
+        }
+
+        if(!check_parity) {
+            memcpy(&data->data[i], buffer, buffer_size);
+            data->length += buffer_size;
+        } else {
+            for (j = 0; j < buffer_size; j+=sizeof(__u32)) {
+                if ((even_parity && (0x80&buffer[j]) != 0x00) ||
+                   (!even_parity && (0x80&buffer[j]) == 0x00)) {
+
+                    if (even_parity) {
+                        buffer[j] &= 0x7f;
+                    }
+
+                    memcpy(&data->data[i+j], &buffer[j], sizeof(__u32));
+                    data->length += sizeof(__u32);
+
+                } else {
+                    stats->rx_errors++;
+                    stats->rx_crc_errors++;
+                }
             }
-
-            err = hi3593_rx_worker_spi_cmd_then_read_word(priv,
-                    rd_cmd, buffer, buffer_size);
-            if (unlikely(err)) {
-                pr_err("avionics-hi3593: Failed to read from fifo\n");
-                goto done;
-            }
-
-            if(!check_parity) {
-				memcpy(&data->data[i], buffer, buffer_size);
-				data->length += buffer_size;
-            } else {
-                for (j = 0; j < buffer_size; j+=sizeof(__u32)) {
-					if ((even_parity && (0x80&buffer[j]) != 0x00) ||
-					   (!even_parity && (0x80&buffer[j]) == 0x00)) {
-
-						if (even_parity) {
-							buffer[j] &= 0x7f;
-						}
-
-						memcpy(&data->data[i+j], &buffer[j], sizeof(__u32));
-						data->length += sizeof(__u32);
-
-					} else {
-						stats->rx_errors++;
-						stats->rx_crc_errors++;
-					}
-				}
-			}
-
-			err = hi3593_rx_worker_spi_write_then_read(priv,
-					&status_cmd, sizeof(status_cmd), &status, sizeof(status));
-			if (unlikely(err < 0)) {
-				pr_err("avionics-hi3593: Failed to read status\n");
-				goto done;
-			}
-
-			if(status & HI3593_FIFO_EMPTY) {
-				break;
-			}
-
-		}
+        }
 
 		if (data->length) {
 			skb = avionics_device_alloc_skb(dev, sizeof(avionics_data) + data->length);
