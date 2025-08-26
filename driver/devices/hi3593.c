@@ -104,7 +104,7 @@ MODULE_VERSION("1.2.4");
 #define HI3593_RX_DELAY_MAX	 (((HI3593_FIFO_DEPTH/2)*BITS_PER_WORD*USEC_PER_SEC)/A429_HIGH_SPEED_HZ)
 #define HI3593_RX_DELAY_MIN	 (((HI3593_FIFO_DEPTH/3)*BITS_PER_WORD*USEC_PER_SEC)/A429_HIGH_SPEED_HZ)
 
-#define HI3593_MAX_SPI_BUFSIZE	HI3593_FIFO_DEPTH*5
+#define HI3593_MAX_SPI_BUFSIZE	HI3593_FIFO_DEPTH*8
 
 struct hi3593 {
 	struct net_device *rx[HI3593_NUM_RX];
@@ -530,6 +530,37 @@ static int hi3593_rx_stop(struct net_device *dev)
 	return 0;
 }
 
+int hi3593_rx_worker_spi_cmd_then_read_word(
+			struct hi3593_priv *priv, __u8 cmd,
+			__u8 *rxbuf, unsigned len)
+{
+	int status, i, num = len/sizeof(__u32);
+	struct spi_message	message = {0};
+	struct spi_transfer	transfer[HI3593_FIFO_DEPTH] = {0};
+
+	spi_message_init_no_memset(&message);
+
+	memset(priv->rx_spi_tx_buffer, 0, 1 + sizeof(__u32));
+    priv->rx_spi_tx_buffer[0] = cmd;
+
+    for (i = 0; i < num; i++) {
+        transfer[i].tx_buf = priv->rx_spi_tx_buffer;
+        transfer[i].rx_buf = &priv->rx_spi_rx_buffer[i*(1 + sizeof(__u32))];
+        transfer[i].len = 1 + sizeof(__u32);
+        if (i < (num-1))
+            transfer[i].cs_change = 1;
+
+        spi_message_add_tail(&transfer[i], &message);
+    }
+
+	status = spi_sync(priv->spi, &message);
+    for (i = 0; i < num; i++) {
+	    memcpy(&rxbuf[i*4], transfer[i].rx_buf + 1, sizeof(__u32));
+    }
+
+	return status;
+}
+
 int hi3593_rx_worker_spi_write_then_read(
 			struct hi3593_priv *priv,
 			const void *txbuf, unsigned n_tx,
@@ -546,7 +577,7 @@ int hi3593_rx_worker_spi_write_then_read(
 
 	spi_message_init_no_memset(&message);
 
-	memset(priv->rx_spi_tx_buffer, 0, HI3593_MAX_SPI_BUFSIZE);
+	memset(priv->rx_spi_tx_buffer, 0, n_tx + n_rx);
 	memcpy(priv->rx_spi_tx_buffer, txbuf, n_tx);
 	transfer.tx_buf = priv->rx_spi_tx_buffer;
 	transfer.rx_buf = priv->rx_spi_rx_buffer;
@@ -848,13 +879,11 @@ static void hi3593_rx_worker(struct work_struct *work)
                 buffer_size = sizeof(__u32);
             }
 
-            for (j = 0; j < buffer_size; j+=sizeof(__u32)) {
-                err = hi3593_rx_worker_spi_write_then_read(priv,
-                        &rd_cmd, sizeof(rd_cmd), &buffer[j], sizeof(__u32));
-                if (unlikely(err)) {
-                    pr_err("avionics-hi3593: Failed to read from fifo\n");
-                    goto done;
-                }
+            err = hi3593_rx_worker_spi_cmd_then_read_word(priv,
+                    rd_cmd, buffer, buffer_size);
+            if (unlikely(err)) {
+                pr_err("avionics-hi3593: Failed to read from fifo\n");
+                goto done;
             }
 
             if(!check_parity) {
