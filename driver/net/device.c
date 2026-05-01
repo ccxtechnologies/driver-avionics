@@ -21,6 +21,7 @@
 #include <linux/skbuff.h>
 #include <net/sock.h>
 
+#include "device.h"
 #include "avionics.h"
 #include "protocol.h"
 #include "avionics-device.h"
@@ -208,12 +209,18 @@ static int device_fill_info(struct sk_buff *skb, const struct net_device *dev)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,14,0)
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(4,13,0)
 static int device_newlink(struct net *src_net, struct net_device *dev,
 			    struct nlattr *tb[], struct nlattr *data[])
 #else
 static int device_newlink(struct net *src_net, struct net_device *dev,
 			    struct nlattr *tb[], struct nlattr *data[],
+			    struct netlink_ext_ack *extack)
+#endif
+#else /* >= 6.14.0 */
+static int device_newlink(struct net_device *dev,
+			    struct rtnl_newlink_params *params,
 			    struct netlink_ext_ack *extack)
 #endif
 {

@@ -1034,7 +1034,6 @@ static void hi6138_remove(struct spi_device *spi)
 	}
 
 	if (hi6138->wq) {
-		flush_scheduled_work();
 		flush_workqueue(hi6138->wq);
 		destroy_workqueue(hi6138->wq);
 	}

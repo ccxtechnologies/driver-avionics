@@ -11,10 +11,10 @@
  * GNU General Public License for more details.
  */
 
-#ifndef __AVIONICS_DEVICE_H__
-#define __AVIONICS_DEVICE_H__
+#ifndef __NET_DEVICE_H__
+#define __NET_DEVICE_H__
 
 int device_netlink_register(void);
 void device_netlink_unregister(void);
 
-#endif /* __AVIONICS_DEVICE_H__ */
+#endif /* __NET_DEVICE_H__ */

@@ -54,7 +54,14 @@ struct sk_buff* protocol_alloc_send_skb(struct net_device *dev,
 
 	protocol_init_skb(dev, skb);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,12,0)
 	sock_tx_timestamp(sk, sk->sk_tsflags, &skb_shinfo(skb)->tx_flags);
+#else
+	{
+		struct sockcm_cookie sockc = { .tsflags = sk->sk_tsflags };
+		sock_tx_timestamp(sk, &sockc, &skb_shinfo(skb)->tx_flags);
+	}
+#endif
 
 	skb->sk  = sk;
 	skb->priority = sk->sk_priority;

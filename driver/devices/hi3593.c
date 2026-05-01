@@ -136,6 +136,7 @@ struct hi3593_priv {
 	/* rx worker spi transfers, used to optimize spi transfers */
 	__u8 rx_spi_rx_buffer[HI3593_MAX_SPI_BUFSIZE];
 	__u8 rx_spi_tx_buffer[HI3593_MAX_SPI_BUFSIZE];
+    struct spi_transfer rx_transfer[HI3593_FIFO_DEPTH];
 
 	__u8 fifo_fill_delay_ms;
 };
@@ -530,13 +531,14 @@ static int hi3593_rx_stop(struct net_device *dev)
 	return 0;
 }
 
-int hi3593_rx_worker_spi_cmd_then_read_word(
+static int hi3593_rx_worker_spi_cmd_then_read_word(
 			struct hi3593_priv *priv, __u8 cmd,
 			__u8 *rxbuf, unsigned len)
 {
 	int status, i, num = len/sizeof(__u32);
 	struct spi_message	message = {0};
-	struct spi_transfer	transfer[HI3593_FIFO_DEPTH] = {0};
+
+    memset(priv->rx_transfer, 0, sizeof(struct spi_transfer) * num);
 
 	spi_message_init_no_memset(&message);
 
@@ -544,24 +546,24 @@ int hi3593_rx_worker_spi_cmd_then_read_word(
     priv->rx_spi_tx_buffer[0] = cmd;
 
     for (i = 0; i < num; i++) {
-        transfer[i].tx_buf = priv->rx_spi_tx_buffer;
-        transfer[i].rx_buf = &priv->rx_spi_rx_buffer[i*(1 + sizeof(__u32))];
-        transfer[i].len = 1 + sizeof(__u32);
+        priv->rx_transfer[i].tx_buf = priv->rx_spi_tx_buffer;
+        priv->rx_transfer[i].rx_buf = &priv->rx_spi_rx_buffer[i*(1 + sizeof(__u32))];
+        priv->rx_transfer[i].len = 1 + sizeof(__u32);
         if (i < (num-1))
-            transfer[i].cs_change = 1;
+            priv->rx_transfer[i].cs_change = 1;
 
-        spi_message_add_tail(&transfer[i], &message);
+        spi_message_add_tail(&priv->rx_transfer[i], &message);
     }
 
 	status = spi_sync(priv->spi, &message);
     for (i = 0; i < num; i++) {
-	    memcpy(&rxbuf[i*4], transfer[i].rx_buf + 1, sizeof(__u32));
+	    memcpy(&rxbuf[i*4], priv->rx_transfer[i].rx_buf + 1, sizeof(__u32));
     }
 
 	return status;
 }
 
-int hi3593_rx_worker_spi_write_then_read(
+static int hi3593_rx_worker_spi_write_then_read(
 			struct hi3593_priv *priv,
 			const void *txbuf, unsigned n_tx,
 			void *rxbuf, unsigned n_rx)
@@ -683,7 +685,7 @@ static void hi3593_empty_fifo(struct hi3593_priv *priv)
 
 }
 
-__u8 reverse(__u8 b)
+static __u8 reverse(__u8 b)
 {
 	b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
 	b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
@@ -1486,7 +1488,6 @@ static void hi3593_remove(struct spi_device *spi)
 	}
 
 	if (hi3593->wq) {
-		flush_scheduled_work();
 		flush_workqueue(hi3593->wq);
 		destroy_workqueue(hi3593->wq);
 	}

@@ -201,7 +201,9 @@ static const struct proto_ops protocol_timestamp_ops = {
 	.getsockopt	= sock_no_getsockopt,
 #endif
 	.mmap		= sock_no_mmap,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,5,0)
 	.sendpage	= sock_no_sendpage,
+#endif
 
 	.poll		= datagram_poll,
 
