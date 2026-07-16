@@ -114,7 +114,7 @@ IFLA_AVIONICS_ARINC429RX = 2
 IFLA_AVIONICS_ARINC429TX = 3
 IFLA_AVIONICS_ARINC717RX = 4
 IFLA_AVIONICS_ARINC717TX = 5
-IFLA_AVIONICS_MIL1553MB = 5
+IFLA_AVIONICS_MIL1553MB = 6
 
 
 class avionics_rate(ctypes.Structure):
@@ -137,6 +137,20 @@ class avionics_arinc429tx(ctypes.Structure):
             ('flags', ctypes.c_uint8),
             ('mode', ctypes.c_uint8),
             ('padding', ctypes.c_uint8 * 2),
+    ]
+
+
+class avionics_arinc717rx(ctypes.Structure):
+    _fields_ = [
+            ('flags', ctypes.c_uint8),
+            ('padding', ctypes.c_uint8 * 3),
+    ]
+
+
+class avionics_arinc717tx(ctypes.Structure):
+    _fields_ = [
+            ('flags', ctypes.c_uint8),
+            ('padding', ctypes.c_uint8 * 3),
     ]
 
 
@@ -303,5 +317,29 @@ if __name__ == "__main__":
 
     if IFLA_AVIONICS_MIL1553MB in data:
         ...
+
+    if IFLA_AVIONICS_ARINC717RX in data:
+        config = avionics_arinc717rx.from_buffer_copy(
+                data[IFLA_AVIONICS_ARINC717RX]
+        )
+
+        bprz = config.flags & AVIONICS_ARINC717RX_BPRZ
+        nosync = config.flags & AVIONICS_ARINC717RX_NOSYNC
+        sftsync = config.flags & AVIONICS_ARINC717RX_SFTSYNC
+
+        print(f"BPRZ = {bool(bprz)}")
+        print(f"No Sync = {bool(nosync)}")
+        print(f"Soft Sync = {bool(sftsync)}")
+
+    if IFLA_AVIONICS_ARINC717TX in data:
+        config = avionics_arinc717tx.from_buffer_copy(
+                data[IFLA_AVIONICS_ARINC717TX]
+        )
+
+        slew = (config.flags & AVIONICS_ARINC717TX_SLEW) >> 1
+        self_test = config.flags & AVIONICS_ARINC717TX_SELF_TEST
+
+        print(f"Slew Rate = {slew}")
+        print(f"Self Test = {bool(self_test)}")
 
     print("===============================")

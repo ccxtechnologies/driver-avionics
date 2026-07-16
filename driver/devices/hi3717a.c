@@ -833,6 +833,7 @@ static void hi3717a_rx_worker(struct work_struct *work)
 
 	ktime_get_real_ts64(&tv);
 	data->time_msecs = (tv.tv_sec*MSEC_PER_SEC) + (tv.tv_nsec/NSEC_PER_MSEC);
+    data->width = 4;
 	data->length = 0;
 
 	status = hi3717a_rxfifo_read(priv, &data->data[data->length], HI3717A_RX_WORDS_PER);

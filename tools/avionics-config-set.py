@@ -116,7 +116,7 @@ IFLA_AVIONICS_ARINC429RX = 2
 IFLA_AVIONICS_ARINC429TX = 3
 IFLA_AVIONICS_ARINC717RX = 4
 IFLA_AVIONICS_ARINC717TX = 5
-IFLA_AVIONICS_MIL1553MB = 5
+IFLA_AVIONICS_MIL1553MB = 6
 
 
 class avionics_rate(ctypes.Structure):
@@ -139,6 +139,20 @@ class avionics_arinc429tx(ctypes.Structure):
             ('flags', ctypes.c_uint8),
             ('mode', ctypes.c_uint8),
             ('padding', ctypes.c_uint8 * 2),
+    ]
+
+
+class avionics_arinc717rx(ctypes.Structure):
+    _fields_ = [
+            ('flags', ctypes.c_uint8),
+            ('padding', ctypes.c_uint8 * 3),
+    ]
+
+
+class avionics_arinc717tx(ctypes.Structure):
+    _fields_ = [
+            ('flags', ctypes.c_uint8),
+            ('padding', ctypes.c_uint8 * 3),
     ]
 
 
@@ -462,6 +476,65 @@ if __name__ == "__main__":
                 " setting for an MIL-1553 MB interface"
         )
         exit(1)
+
+    elif IFLA_AVIONICS_ARINC717RX in data:
+        rx_config = avionics_arinc717rx.from_buffer_copy(
+                data[IFLA_AVIONICS_ARINC717RX]
+        )
+        flags = rx_config.flags
+
+        if setting_name == "bprz":
+            flags = str_to_flag(setting_value, flags, AVIONICS_ARINC717RX_BPRZ)
+        elif setting_name == "no-sync":
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC717RX_NOSYNC
+            )
+        elif setting_name == "soft-sync":
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC717RX_SFTSYNC
+            )
+        else:
+            print(
+                    f"Error: {setting_name} is not a valid setting for ARINC-717 RX"
+            )
+            exit(1)
+
+        padding_def = ctypes.c_uint8 * 3
+        cfg = bytes(
+                rtattr(
+                        ctypes.sizeof(rtattr) +
+                        ctypes.sizeof(avionics_arinc717rx),
+                        IFLA_AVIONICS_ARINC717RX
+                )
+        ) + bytes(avionics_arinc717rx(flags, padding_def()))
+
+    elif IFLA_AVIONICS_ARINC717TX in data:
+        tx_config = avionics_arinc717tx.from_buffer_copy(
+                data[IFLA_AVIONICS_ARINC717TX]
+        )
+        flags = tx_config.flags
+
+        if setting_name == "slew-rate":
+            flags &= ~AVIONICS_ARINC717TX_SLEW
+            flags |= ((int(setting_value) & 3) << 1)
+        elif setting_name == "self-test":
+            flags = str_to_flag(
+                    setting_value, flags, AVIONICS_ARINC717TX_SELF_TEST
+            )
+        else:
+            print(
+                    f"Error: {setting_name} is not a valid setting for ARINC-717 TX"
+            )
+            exit(1)
+
+        padding_def = ctypes.c_uint8 * 3
+        cfg = bytes(
+                rtattr(
+                        ctypes.sizeof(rtattr) +
+                        ctypes.sizeof(avionics_arinc717tx),
+                        IFLA_AVIONICS_ARINC717TX
+                )
+        ) + bytes(avionics_arinc717tx(flags, padding_def()))
 
     set_device_config(device_name, cfg)
 
