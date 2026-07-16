@@ -1019,11 +1019,38 @@ static int hi3717a_reset(struct spi_device *spi)
 {
 	struct hi3717a *hi3717a = spi_get_drvdata(spi);
 	ssize_t status;
+	__u8 wr_cmd[2];
+	int err;
 
-	gpio_set_value(hi3717a->reset_gpio, 0);
-	usleep_range(10, 100);
-	gpio_set_value(hi3717a->reset_gpio, 1);
+	if (hi3717a->reset_gpio > 0) {
+		/* Hardware Reset */
+		gpio_set_value(hi3717a->reset_gpio, 0);
+		usleep_range(10, 100);
+		gpio_set_value(hi3717a->reset_gpio, 1);
+	} else {
+		/* Software Reset Fallback */
+		pr_warn("avionics-hi3717a: Reset GPIO missing, using Software Reset\n");
 
+		wr_cmd[0] = HI3717A_OPCODE_WR_CTRL1;
+		wr_cmd[1] = (1 << 3); /* Set SRST bit */
+
+		err = spi_write(spi, wr_cmd, sizeof(wr_cmd));
+		if (err < 0) {
+			pr_err("avionics-hi3717a: Failed to send soft reset command\n");
+			return err;
+		}
+
+		usleep_range(10, 100);
+
+		wr_cmd[1] = 0x00; /* Clear SRST bit to bring out of reset */
+		err = spi_write(spi, wr_cmd, sizeof(wr_cmd));
+		if (err < 0) {
+			pr_err("avionics-hi3717a: Failed to clear soft reset command\n");
+			return err;
+		}
+	}
+
+	/* Verify the chip is awake and the FIFO is clear */
 	status = spi_w8r8(spi, HI3717A_OPCODE_RD_TXFSTAT);
 	if (status != 0x20) {
 		pr_err("avionics-hi3717a: TX FIFO is not cleared: %zx\n",
