@@ -449,8 +449,9 @@ static void hi3717a_tx_worker(struct work_struct *work)
 	struct hi3717a_priv *priv;
 	__u8 wr_cmd[3];
 	ssize_t status;
-	int err, i, delay, frame_size;
+	int err, i = 0, frame_size;
 	__u16 *tx_buffer, vbuffer;
+	long fill_delay_us;
 
 	priv = container_of((struct delayed_work*)work,
 			    struct hi3717a_priv, worker);
@@ -464,71 +465,66 @@ static void hi3717a_tx_worker(struct work_struct *work)
 	}
 
 	tx_buffer = priv->tx_buffer;
+	frame_size = priv->tx_buffer_size / 4;
 
-	frame_size = priv->tx_buffer_size/4;
-	delay = (*priv->period_usec)*8;
+	/* Sleep time to let FIFO drain by half (16 words) */
+	fill_delay_us = (*priv->period_usec) * (HI3717A_FIFO_DEPTH / 2);
+
 	wr_cmd[0] = HI3717A_OPCODE_WR_TXFIFO;
-	i = 0;
 
-	/* Set frame markers */
+	/* Set ARINC-717 frame synchronization markers */
 	tx_buffer[frame_size*0] = 01107;
 	tx_buffer[frame_size*1] = 02670;
 	tx_buffer[frame_size*2] = 05107;
 	tx_buffer[frame_size*3] = 06670;
 
 	while (atomic_read(priv->tx_enabled)) {
+		mutex_lock(priv->lock);
 
-		while(1) {
-			mutex_lock(priv->lock);
-			status = hi3717a_get_cntrl(priv,
-						   HI3717A_OPCODE_RD_TXFSTAT);
+		status = hi3717a_get_cntrl(priv, HI3717A_OPCODE_RD_TXFSTAT);
+		if (status < 0) {
+			pr_err("avionics-hi3717a: Failed to read status\n");
 			mutex_unlock(priv->lock);
+			break;
+		}
 
-			if (status < 0) {
-				pr_err("avionics-hi3717a:"
-				       " Failed to read status\n");
-				goto done;
-			}
+		if (status & HI3717A_TXFIFO_EMPTY) {
+			stats->tx_errors++;
+			stats->tx_fifo_errors++;
+		}
 
-			if (status & HI3717A_TXFIFO_EMPTY) {
-				pr_warn("avionics-hi3717a: TX FIFO Empty\n");
-				stats->tx_errors++;
-				stats->tx_fifo_errors++;
-			}
+		/* Bulk load until the FIFO is completely full (32 words) */
+		while (!(status & HI3717A_TXFIFO_FULL)) {
+			vbuffer = cpu_to_be16(tx_buffer[i]);
+			wr_cmd[1] = (vbuffer & 0x00ff);
+			wr_cmd[2] = (vbuffer & 0xff00) >> 8;
 
-			if (status & HI3717A_TXFIFO_FULL) {
+			err = spi_write(priv->spi, wr_cmd, sizeof(wr_cmd));
+			if (err < 0) {
+				pr_err("avionics-hi3717a: Failed to load tx fifo\n");
 				break;
 			}
 
-			vbuffer = cpu_to_be16(tx_buffer[i]);
-			wr_cmd[1] = (vbuffer&0x00ff);
-			wr_cmd[2] = (vbuffer&0xff00)>>8;
-
-			mutex_lock(priv->lock);
-			err = spi_write(priv->spi, &wr_cmd, sizeof(wr_cmd));
-			mutex_unlock(priv->lock);
-
-			if (err < 0) {
-				pr_err("avionics-hi3717a: Failed to load"
-				       " tx fifo\n");
-				goto done;
-			}
-
 			stats->tx_bytes += 2;
-			if (i < (priv->tx_buffer_size-1)) {
+			stats->tx_packets++;
+
+			if (i < (priv->tx_buffer_size - 1)) {
 				i++;
 			} else {
 				i = 0;
-				stats->tx_packets++;
 			}
+
+			status = hi3717a_get_cntrl(priv, HI3717A_OPCODE_RD_TXFSTAT);
+			if (status < 0) break;
 		}
 
-		usleep_range(delay, delay+100);
+		mutex_unlock(priv->lock);
+
+		/* Sleep while the hardware continuously transmits the batch */
+		usleep_range(fill_delay_us, fill_delay_us + 500);
 	}
 
-done:
 	kfree(tx_buffer);
-
 }
 
 static int hi3717a_tx_open(struct net_device *dev)
