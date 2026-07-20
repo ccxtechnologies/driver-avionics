@@ -205,9 +205,32 @@ if __name__ == "__main__":
                         )
 
                     if d.width == 4:
+                        last_count, last_frame, last_word = 0, 0, 0
                         for i in range(data_size, len(data), 4):
-                            d = int.from_bytes(data[i:i + 4], "little")
-                            print(f"{i:08d}: 0x{d:08x}")
+                            val = int.from_bytes(data[i:i + 4], "little")
+
+                            if "arinc717" in device_name:
+                                word = (val & 0x0fff0000) >> 16
+                                count = (val & 0x0000fff8) >> 3
+                                frame = (val & 0x3)
+
+                                if (count != last_count +
+                                    1) and (frame != (last_frame + 1) % 4):
+                                    print(
+                                            f"{i:08d}: ==> 0x{last_word:03X} -- {last_count} -- {last_frame}"
+                                    )
+                                elif word:
+                                    print(
+                                            f"{i:08d}: ~~> 0x{word:03X} -- {count} -- {frame}"
+                                    )
+                                else:
+                                    print(
+                                            f"{i:08d}: --> 0x{word:03X} -- {count} -- {frame}"
+                                    )
+
+                                last_count, last_frame, last_word = count, frame, word
+                            else:
+                                print(f"{i:08d}: 0x{val:08x}")
                     elif d.width == 2:
                         for i in range(data_size, len(data), 2):
                             d = int.from_bytes(data[i:i + 2], "little")
