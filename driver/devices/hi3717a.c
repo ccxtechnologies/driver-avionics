@@ -638,7 +638,6 @@ static int hi3717a_rxfifo_read(struct hi3717a_priv *priv,
 	struct spi_message message;
 	struct spi_transfer *opcodes = priv->opcodes;
 	__u8 rd_cmd[5], buffer[HI3717A_FIFO_DEPTH*5];
-	__u32 vbuffer, val;
 
 	spi_message_init(&message);
 	memset(opcodes, 0, sizeof(*opcodes) * HI3717A_FIFO_DEPTH);
@@ -658,10 +657,8 @@ static int hi3717a_rxfifo_read(struct hi3717a_priv *priv,
 	status = spi_sync(priv->spi, &message);
 
 	for(i = 0; i < num_reads; i++) {
-		vbuffer = buffer[i*5+1] + (buffer[i*5+2]<<8) +
-			(buffer[i*5+3]<<16) + (buffer[i*5+4]<<24);
-		val = be32_to_cpu(vbuffer);
-		memcpy(&dest[i*sizeof(__u32)], &val, sizeof(__u32));
+		/* Directly copy the 4 Big-Endian SPI bytes to the socket buffer */
+		memcpy(&dest[i*sizeof(__u32)], &buffer[i*5+1], sizeof(__u32));
 	}
 
 	if(status < 0) {
@@ -730,7 +727,6 @@ static int hi3717a_rxfifo_read_all(struct hi3717a_priv *priv, __u8 *dest)
 	struct spi_transfer *xfer;
 	__u8 *tx_buf, *rx_buf;
 	int i, count = 0, err;
-	__u32 val;
 
 	/* 32 words * 2 transfers (Status + Data) = 64 transfers */
 	int num_xfers = HI3717A_FIFO_DEPTH * 2;
@@ -787,14 +783,8 @@ static int hi3717a_rxfifo_read_all(struct hi3717a_priv *priv, __u8 *dest)
 		if (rx_buf[i * 7 + 1] & HI3717A_RXFIFO_EMPTY)
 			break; /* FIFO was empty when this read occurred, discard and exit */
 
-		/* Extract data & word count from the 0xFE command response */
-		val = (rx_buf[i * 7 + 3]) +
-		      (rx_buf[i * 7 + 4] << 8) +
-		      (rx_buf[i * 7 + 5] << 16) +
-		      (rx_buf[i * 7 + 6] << 24);
-
-		val = be32_to_cpu(val);
-		memcpy(&dest[count * sizeof(__u32)], &val, sizeof(__u32));
+		/* Directly copy the 4 Big-Endian SPI bytes to the socket buffer */
+		memcpy(&dest[count * sizeof(__u32)], &rx_buf[i * 7 + 3], sizeof(__u32));
 		count++;
 	}
 
@@ -914,6 +904,7 @@ static netdev_tx_t hi3717a_tx_start_xmit(struct sk_buff *skb,
 	struct hi3717a_priv *priv;
 	avionics_data *data_hdr;
 	__u16 frame, word_count, word;
+	__be32 value_be;
 	__u32 value;
 	int offset, i;
 
@@ -954,7 +945,9 @@ static netdev_tx_t hi3717a_tx_start_xmit(struct sk_buff *skb,
 	for (i = 0; i < data_hdr->length; i += sizeof(__u32)) {
 		/* ARINC-717 doesn't use the transmit timestamp for anything */
 
-		memcpy(&value, &data_hdr->data[i], sizeof(__u32));
+		/* Read network byte order from socket, convert to host endianness */
+		memcpy(&value_be, &data_hdr->data[i], sizeof(__be32));
+		value = be32_to_cpu(value_be);
 
 		word = (value&0x0fff0000)>>16;
 		word_count = (value&0x0000fff8)>>3;
