@@ -158,6 +158,7 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 	__u8 value;
 	ssize_t ctrl0, ctrl1, fspin, wrdcnt;
 	int err;
+	__u8 wr_cmd[2];
 
 	priv = avionics_device_priv(dev);
 	if (!priv) {
@@ -227,9 +228,35 @@ static int hi3717a_set_rate(struct avionics_rate *rate,
 
 	mutex_lock(priv->lock);
 
-	gpio_set_value(priv->reset_gpio, 0);
-	usleep_range(10, 100);
-	gpio_set_value(priv->reset_gpio, 1);
+	if (priv->reset_gpio > 0) {
+		/* Hardware Reset */
+		gpio_set_value(priv->reset_gpio, 0);
+		usleep_range(10, 100);
+		gpio_set_value(priv->reset_gpio, 1);
+	} else {
+		/* Software Reset Fallback */
+		pr_warn("avionics-hi3717a: Reset GPIO missing, using Software Reset\n");
+
+		wr_cmd[0] = HI3717A_OPCODE_WR_CTRL1;
+		wr_cmd[1] = (1 << 3); /* Set SRST bit */
+
+		err = spi_write(priv->spi, wr_cmd, sizeof(wr_cmd));
+		if (err < 0) {
+			pr_err("avionics-hi3717a: Failed to send soft reset command\n");
+			mutex_unlock(priv->lock);
+			return err;
+		}
+
+		usleep_range(10, 100);
+
+		wr_cmd[1] = 0x00; /* Clear SRST bit to bring out of reset */
+		err = spi_write(priv->spi, wr_cmd, sizeof(wr_cmd));
+		if (err < 0) {
+			pr_err("avionics-hi3717a: Failed to clear soft reset command\n");
+			mutex_unlock(priv->lock);
+			return err;
+		}
+	}
 
 	mutex_unlock(priv->lock);
 
