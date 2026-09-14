@@ -150,6 +150,7 @@ if __name__ == "__main__":
         )
 
         with open(file_name, 'wb') as fo:
+            last_count, last_frame, last_word = -1, -1, -1
             while True:
                 data = sk.recv(4096)
                 print(f"+++ Received: {len(data)} bytes +++")
@@ -205,19 +206,21 @@ if __name__ == "__main__":
                         )
 
                     if d.width == 4:
-                        last_count, last_frame, last_word = 0, 0, 0
                         for i in range(data_size, len(data), 4):
-                            val = int.from_bytes(data[i:i + 4], "little")
 
                             if "arinc717" in device_name:
+                                val = int.from_bytes(data[i:i + 4], "big")
                                 word = (val & 0x0fff0000) >> 16
                                 count = (val & 0x0000fff8) >> 3
                                 frame = (val & 0x3)
 
-                                if (count != last_count +
-                                    1) and (frame != (last_frame + 1) % 4):
+                                if (
+                                        last_count != -1
+                                        and (count != last_count + 1)
+                                        and (frame != (last_frame + 1) % 4)
+                                ):
                                     print(
-                                            f"{i:08d}: ==> 0x{last_word:03X} -- {last_count} -- {last_frame}"
+                                            f"{i:08d}: ==> 0x{word:03X} -- {count} -- {frame}"
                                     )
                                 elif word:
                                     print(
@@ -230,6 +233,7 @@ if __name__ == "__main__":
 
                                 last_count, last_frame, last_word = count, frame, word
                             else:
+                                val = int.from_bytes(data[i:i + 4], "little")
                                 print(f"{i:08d}: 0x{val:08x}")
                     elif d.width == 2:
                         for i in range(data_size, len(data), 2):
